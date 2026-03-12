@@ -4,3 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+async-trait = { workspace = true }
+jsonwebtoken = { version = "10.2.0", features = ["rust_crypto"] }
+mastra-packages-auth = { path = "../../packages/auth" }
+
+[dev-dependencies]
+chrono = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
