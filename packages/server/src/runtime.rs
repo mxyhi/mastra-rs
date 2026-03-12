@@ -12,7 +12,8 @@ use crate::{
     contracts::{
         AgentSummary, FinishReason, GenerateRequest, GenerateResponse, GenerateStreamEvent,
         GenerateStreamFinishEvent, GenerateStreamStartEvent, GenerateStreamTextDeltaEvent,
-        StartWorkflowRunRequest, UsageStats, WorkflowSummary,
+        GenerateStreamToolCallEvent, GenerateStreamToolResultEvent, StartWorkflowRunRequest,
+        UsageStats, WorkflowSummary,
     },
     error::{ServerError, ServerResult},
 };
@@ -124,6 +125,24 @@ impl AgentRuntime for CoreAgentRuntime {
                             run_id: run_id.clone(),
                             message_id: message_id.clone(),
                             delta,
+                        }));
+                    }
+                    ModelEvent::ToolCall(call) => {
+                        yield Ok(GenerateStreamEvent::ToolCall(GenerateStreamToolCallEvent {
+                            run_id: run_id.clone(),
+                            message_id: message_id.clone(),
+                            tool_call_id: call.id,
+                            tool_name: call.name,
+                            input: call.input,
+                        }));
+                    }
+                    ModelEvent::ToolResult(result) => {
+                        yield Ok(GenerateStreamEvent::ToolResult(GenerateStreamToolResultEvent {
+                            run_id: run_id.clone(),
+                            message_id: message_id.clone(),
+                            tool_call_id: result.id,
+                            tool_name: result.name,
+                            output: result.output,
                         }));
                     }
                     ModelEvent::Done(response) => {

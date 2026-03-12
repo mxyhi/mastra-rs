@@ -12,8 +12,9 @@ pub use types::{
     ChatMessage, CreateMemoryThreadRequest, CreateMemoryThreadResponse, CreateWorkflowRunRequest,
     ErrorResponse, FinishReason, GenerateRequest, GenerateResponse, GenerateStreamEvent,
     GenerateStreamFinishEvent, GenerateStreamStartEvent, GenerateStreamTextDeltaEvent,
-    ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse, ListThreadsResponse,
-    ListWorkflowsResponse, MemoryMessageInput, MemoryMessageRole, MemorySummary, RouteDescription,
+    GenerateStreamToolCallEvent, GenerateStreamToolResultEvent, ListAgentsResponse,
+    ListMemoriesResponse, ListMemoryMessagesResponse, ListThreadsResponse, ListWorkflowsResponse,
+    MemoryMessageInput, MemoryMessageRole, MemorySummary, RouteDescription,
     StartWorkflowRunRequest, StartWorkflowRunResponse, UsageStats, WorkflowRunRecord,
     WorkflowRunRef, WorkflowRunStatus, WorkflowSummary,
 };

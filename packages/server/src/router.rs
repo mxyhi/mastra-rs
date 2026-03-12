@@ -426,12 +426,19 @@ fn encode_stream_event(event: GenerateStreamEvent) -> Event {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use async_trait::async_trait;
     use axum::{
         body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
     use futures::{StreamExt, stream::BoxStream};
+    use mastra_core::{
+        Agent, AgentConfig, FinishReason as CoreFinishReason, MemoryConfig, ModelRequest,
+        ModelResponse, ModelToolCall, StaticModel, Tool,
+    };
+    use parking_lot::RwLock;
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
@@ -534,6 +541,65 @@ mod tests {
         MastraServer::new(registry).into_router()
     }
 
+    fn build_tool_stream_router() -> axum::Router {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        let steps = Arc::new(RwLock::new(0usize));
+        let model_steps = Arc::clone(&steps);
+
+        server.register_agent(Agent::new(AgentConfig {
+            id: "tool-stream".to_owned(),
+            name: "Tool Stream".to_owned(),
+            instructions: "Use tools when helpful".to_owned(),
+            description: Some("Streams tool lifecycle events".to_owned()),
+            model: Arc::new(StaticModel::new(move |_request: ModelRequest| {
+                let model_steps = Arc::clone(&model_steps);
+                async move {
+                    let step = {
+                        let mut step_count = model_steps.write();
+                        let current = *step_count;
+                        *step_count += 1;
+                        current
+                    };
+
+                    match step {
+                        0 => Ok(ModelResponse {
+                            text: String::new(),
+                            data: Value::Null,
+                            finish_reason: CoreFinishReason::ToolCall,
+                            usage: None,
+                            tool_calls: vec![ModelToolCall {
+                                id: "call-http".to_owned(),
+                                name: "sum".to_owned(),
+                                input: json!({ "a": 2, "b": 5 }),
+                            }],
+                        }),
+                        1 => Ok(ModelResponse {
+                            text: "7".to_owned(),
+                            data: Value::Null,
+                            finish_reason: CoreFinishReason::Stop,
+                            usage: None,
+                            tool_calls: Vec::new(),
+                        }),
+                        other => panic!("unexpected model step {other}"),
+                    }
+                }
+            })),
+            tools: vec![Tool::new(
+                "sum",
+                "add numbers",
+                |input, _context| async move {
+                    let a = input.get("a").and_then(Value::as_i64).unwrap_or_default();
+                    let b = input.get("b").and_then(Value::as_i64).unwrap_or_default();
+                    Ok(json!(a + b))
+                },
+            )],
+            memory: None,
+            memory_config: MemoryConfig::default(),
+        }));
+
+        server.into_router()
+    }
+
     #[tokio::test]
     async fn lists_registered_agents() {
         let response = build_router()
@@ -613,6 +679,42 @@ mod tests {
         assert!(body.contains("event: text_delta"));
         assert!(body.contains("event: finish"));
         assert!(body.contains("\"run_id\":\"run-123\""));
+    }
+
+    #[tokio::test]
+    async fn streams_tool_lifecycle_events_as_sse() {
+        let request = serde_json::to_vec(&GenerateRequest {
+            messages: AgentMessages::Text("2 + 5 = ?".to_owned()),
+            resource_id: None,
+            thread_id: Some("thread-http".to_owned()),
+            run_id: Some("run-tool".to_owned()),
+            max_steps: Some(4),
+            request_context: Default::default(),
+        })
+        .unwrap();
+
+        let response = build_tool_stream_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/agents/tool-stream/stream")
+                    .header("content-type", "application/json")
+                    .body(Body::from(request))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("event: start"));
+        assert!(body.contains("event: tool_call"));
+        assert!(body.contains("event: tool_result"));
+        assert!(body.contains("event: finish"));
+        assert!(body.contains("\"tool_call_id\":\"call-http\""));
+        assert!(body.contains("\"tool_name\":\"sum\""));
+        assert!(body.contains("\"text\":\"7\""));
     }
 
     #[tokio::test]

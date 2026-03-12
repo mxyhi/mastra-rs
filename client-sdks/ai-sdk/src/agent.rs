@@ -109,31 +109,43 @@ impl AiSdkEventSource for AiSdkAgent {
             .map_err(AiSdkError::Client)?;
 
         let mapped: BoxStream<'static, Result<AiSdkEvent, AiSdkError>> = stream
-            .map(|event| event.map_err(AiSdkError::Client).and_then(map_stream_event))
+            .filter_map(|event| async move {
+                match event {
+                    Ok(event) => match map_stream_event(event) {
+                        Ok(Some(event)) => Some(Ok(event)),
+                        Ok(None) => None,
+                        Err(error) => Some(Err(error)),
+                    },
+                    Err(error) => Some(Err(AiSdkError::Client(error))),
+                }
+            })
             .boxed();
 
         Ok(mapped)
     }
 }
 
-fn map_stream_event(event: GenerateStreamEvent) -> Result<AiSdkEvent, AiSdkError> {
+fn map_stream_event(event: GenerateStreamEvent) -> Result<Option<AiSdkEvent>, AiSdkError> {
     match event {
-        GenerateStreamEvent::Start(start) => Ok(AiSdkEvent::Start(AiSdkStartEvent {
+        GenerateStreamEvent::Start(start) => Ok(Some(AiSdkEvent::Start(AiSdkStartEvent {
             run_id: start.run_id,
             message_id: start.message_id,
             thread_id: start.thread_id,
-        })),
-        GenerateStreamEvent::TextDelta(delta) => Ok(AiSdkEvent::TextDelta(AiSdkTextDeltaEvent {
-            run_id: delta.run_id,
-            message_id: delta.message_id,
-            delta: delta.delta,
-        })),
-        GenerateStreamEvent::Finish(finish) => Ok(AiSdkEvent::Finish(AiSdkFinishEvent {
+        }))),
+        GenerateStreamEvent::TextDelta(delta) => {
+            Ok(Some(AiSdkEvent::TextDelta(AiSdkTextDeltaEvent {
+                run_id: delta.run_id,
+                message_id: delta.message_id,
+                delta: delta.delta,
+            })))
+        }
+        GenerateStreamEvent::ToolCall(_) | GenerateStreamEvent::ToolResult(_) => Ok(None),
+        GenerateStreamEvent::Finish(finish) => Ok(Some(AiSdkEvent::Finish(AiSdkFinishEvent {
             run_id: finish.run_id,
             message: AiSdkMessage::with_id(finish.message_id, AiSdkRole::Assistant, finish.text),
             finish_reason: finish.finish_reason,
             usage: finish.usage,
-        })),
+        }))),
         GenerateStreamEvent::Error(error) => Err(AiSdkError::Validation(error.error)),
     }
 }

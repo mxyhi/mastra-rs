@@ -103,6 +103,24 @@ pub struct GenerateStreamTextDeltaEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GenerateStreamToolCallEvent {
+    pub run_id: String,
+    pub message_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub input: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GenerateStreamToolResultEvent {
+    pub run_id: String,
+    pub message_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub output: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GenerateStreamFinishEvent {
     pub run_id: String,
     pub message_id: String,
@@ -120,6 +138,8 @@ pub struct GenerateStreamFinishEvent {
 pub enum GenerateStreamEvent {
     Start(GenerateStreamStartEvent),
     TextDelta(GenerateStreamTextDeltaEvent),
+    ToolCall(GenerateStreamToolCallEvent),
+    ToolResult(GenerateStreamToolResultEvent),
     Finish(GenerateStreamFinishEvent),
     Error(ErrorResponse),
 }
@@ -129,6 +149,8 @@ impl GenerateStreamEvent {
         match self {
             Self::Start(_) => "start",
             Self::TextDelta(_) => "text_delta",
+            Self::ToolCall(_) => "tool_call",
+            Self::ToolResult(_) => "tool_result",
             Self::Finish(_) => "finish",
             Self::Error(_) => "error",
         }

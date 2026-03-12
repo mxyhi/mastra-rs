@@ -1447,6 +1447,7 @@ dependencies = [
 name = "mastra-core"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
  "async-trait",
  "chrono",
  "futures",

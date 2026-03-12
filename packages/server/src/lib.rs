@@ -14,9 +14,9 @@ use runtime::{CoreAgentRuntime, CoreWorkflowRuntime};
 pub use contracts::{
     AgentMessages, AgentSummary, ChatMessage, ErrorResponse, FinishReason, GenerateResponse,
     GenerateStreamEvent, GenerateStreamFinishEvent, GenerateStreamStartEvent,
-    GenerateStreamTextDeltaEvent, RouteDescription,
-    StartWorkflowRunResponse as WorkflowRunResponse, UsageStats, WorkflowRunRecord,
-    WorkflowRunStatus, WorkflowSummary,
+    GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent, GenerateStreamToolResultEvent,
+    RouteDescription, StartWorkflowRunResponse as WorkflowRunResponse, UsageStats,
+    WorkflowRunRecord, WorkflowRunStatus, WorkflowSummary,
 };
 pub use error::ServerError as MastraServerError;
 pub use registry::RuntimeRegistry as MastraRuntimeRegistry;

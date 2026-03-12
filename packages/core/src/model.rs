@@ -71,6 +71,8 @@ pub struct ModelResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub enum ModelEvent {
     TextDelta(String),
+    ToolCall(ModelToolCall),
+    ToolResult(ModelToolResult),
     Done(ModelResponse),
 }
 

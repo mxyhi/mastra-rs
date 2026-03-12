@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use async_stream::try_stream;
 use futures::{StreamExt, stream};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -193,30 +194,90 @@ impl Agent {
     ) -> futures::stream::BoxStream<'static, Result<AgentStreamResponse>> {
         if !self.tools.is_empty() {
             let agent = self.clone();
-            return stream::once(async move {
-                let response = agent
-                    .generate(AgentGenerateRequest {
-                        prompt: request.prompt,
-                        thread_id: request.thread_id,
-                        resource_id: request.resource_id,
-                        run_id: request.run_id,
-                        max_steps: request.max_steps,
-                        request_context: request.request_context,
-                    })
-                    .await?;
+            return try_stream! {
+                let AgentStreamRequest {
+                    prompt,
+                    thread_id,
+                    resource_id,
+                    run_id,
+                    max_steps,
+                    request_context,
+                } = request;
+                let (thread_id, memory_context) = agent.prepare_memory(&prompt, thread_id, resource_id).await?;
+                let run_id = run_id.unwrap_or_else(|| Uuid::now_v7().to_string());
+                let max_steps = max_steps.unwrap_or(DEFAULT_AGENT_MAX_STEPS).max(1);
+                let tool_names = agent.tool_names();
+                let mut tool_results = Vec::new();
 
-                Ok(AgentStreamResponse {
-                    id: agent.id.clone(),
-                    event: ModelEvent::Done(ModelResponse {
-                        text: response.text,
-                        data: response.data,
-                        finish_reason: response.finish_reason,
-                        usage: response.usage,
-                        tool_calls: Vec::new(),
-                    }),
-                    thread_id: response.thread_id,
-                })
-            })
+                for step in 0..max_steps {
+                    let response = agent
+                        .model
+                        .generate(ModelRequest {
+                            prompt: prompt.clone(),
+                            instructions: agent.instructions.clone(),
+                            memory: memory_context.clone(),
+                            tool_names: tool_names.clone(),
+                            tool_results: tool_results.clone(),
+                            run_id: Some(run_id.clone()),
+                            thread_id: thread_id.clone(),
+                            max_steps: Some(max_steps),
+                            request_context: request_context.clone(),
+                        })
+                        .await?;
+                    let finish_reason = response.normalized_finish_reason();
+                    let tool_calls = response.normalized_tool_calls();
+
+                    if tool_calls.is_empty() {
+                        if finish_reason == FinishReason::ToolCall {
+                            Err(MastraError::tool(format!(
+                                "agent '{}' received tool_call finish reason without tool payload",
+                                agent.id
+                            )))?;
+                        }
+                        agent.persist_response(&thread_id, &prompt, &response).await?;
+                        yield AgentStreamResponse {
+                            id: agent.id.clone(),
+                            event: ModelEvent::Done(response),
+                            thread_id,
+                        };
+                        return;
+                    }
+
+                    if step + 1 >= max_steps {
+                        Err(MastraError::tool(format!(
+                            "agent '{}' exhausted max_steps ({max_steps}) before finishing tool loop",
+                            agent.id
+                        )))?;
+                    }
+
+                    for call in &tool_calls {
+                        yield AgentStreamResponse {
+                            id: agent.id.clone(),
+                            event: ModelEvent::ToolCall(call.clone()),
+                            thread_id: thread_id.clone(),
+                        };
+                    }
+
+                    let mut round_results = agent
+                        .execute_tool_calls(&tool_calls, &request_context, &run_id, &thread_id)
+                        .await?;
+
+                    for result in &round_results {
+                        yield AgentStreamResponse {
+                            id: agent.id.clone(),
+                            event: ModelEvent::ToolResult(result.clone()),
+                            thread_id: thread_id.clone(),
+                        };
+                    }
+
+                    tool_results.append(&mut round_results);
+                }
+
+                Err(MastraError::tool(format!(
+                    "agent '{}' failed to complete within {max_steps} steps",
+                    agent.id
+                )))?;
+            }
             .boxed();
         }
 
@@ -690,5 +751,99 @@ mod tests {
         assert!(model_requests[0].tool_results.is_empty());
         assert_eq!(model_requests[0].run_id.as_deref(), Some("run-123"));
         assert_eq!(model_requests[0].thread_id.as_deref(), Some("thread-123"));
+    }
+
+    #[tokio::test]
+    async fn stream_emits_tool_lifecycle_for_tool_enabled_agents() {
+        let model_steps = Arc::new(RwLock::new(Vec::new()));
+
+        let recording_steps = Arc::clone(&model_steps);
+        let model = StaticModel::new(move |request| {
+            let recording_steps = Arc::clone(&recording_steps);
+            async move {
+                let step = {
+                    let mut steps = recording_steps.write();
+                    let step = steps.len();
+                    steps.push(request.clone());
+                    step
+                };
+
+                match step {
+                    0 => Ok(ModelResponse {
+                        text: String::new(),
+                        data: Value::Null,
+                        finish_reason: FinishReason::ToolCall,
+                        usage: None,
+                        tool_calls: vec![ModelToolCall {
+                            id: "call-stream".into(),
+                            name: "sum".into(),
+                            input: json!({ "a": 1, "b": 4 }),
+                        }],
+                    }),
+                    1 => Ok(ModelResponse {
+                        text: "5".into(),
+                        data: Value::Null,
+                        finish_reason: FinishReason::Stop,
+                        usage: None,
+                        tool_calls: Vec::new(),
+                    }),
+                    other => panic!("unexpected model step {other}"),
+                }
+            }
+        });
+
+        let sum_tool = Tool::new("sum", "add numbers", |input, _context| async move {
+            let a = input.get("a").and_then(Value::as_i64).unwrap_or_default();
+            let b = input.get("b").and_then(Value::as_i64).unwrap_or_default();
+            Ok(json!(a + b))
+        });
+
+        let agent = Agent::new(AgentConfig {
+            id: "tool-stream".into(),
+            name: "Tool Stream".into(),
+            instructions: "Use tools when helpful".into(),
+            description: None,
+            model: Arc::new(model),
+            tools: vec![sum_tool],
+            memory: None,
+            memory_config: MemoryConfig::default(),
+        });
+
+        let events = agent
+            .stream(AgentStreamRequest {
+                prompt: "1 + 4 = ?".into(),
+                thread_id: Some("thread-stream".into()),
+                resource_id: None,
+                run_id: Some("run-stream".into()),
+                max_steps: Some(4),
+                request_context: RequestContext::new(),
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(events.len(), 3);
+
+        match &events[0].as_ref().expect("tool call event").event {
+            ModelEvent::ToolCall(call) => {
+                assert_eq!(call.id, "call-stream");
+                assert_eq!(call.name, "sum");
+                assert_eq!(call.input, json!({ "a": 1, "b": 4 }));
+            }
+            other => panic!("expected tool call event, got {other:?}"),
+        }
+
+        match &events[1].as_ref().expect("tool result event").event {
+            ModelEvent::ToolResult(result) => {
+                assert_eq!(result.id, "call-stream");
+                assert_eq!(result.name, "sum");
+                assert_eq!(result.output, json!(5));
+            }
+            other => panic!("expected tool result event, got {other:?}"),
+        }
+
+        match &events[2].as_ref().expect("done event").event {
+            ModelEvent::Done(response) => assert_eq!(response.text, "5"),
+            other => panic!("expected done event, got {other:?}"),
+        }
     }
 }
