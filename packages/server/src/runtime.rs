@@ -3,17 +3,19 @@ use async_trait::async_trait;
 use futures::{StreamExt, stream::BoxStream};
 use mastra_core::{
     Agent, AgentGenerateRequest, AgentStreamRequest, FinishReason as CoreFinishReason, ModelEvent,
-    ModelResponse as CoreModelResponse, RequestContext, UsageStats as CoreUsageStats, Workflow,
+    ModelResponse as CoreModelResponse, RequestContext, Tool, ToolExecutionContext,
+    UsageStats as CoreUsageStats, Workflow,
 };
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
     contracts::{
-        AgentSummary, FinishReason, GenerateRequest, GenerateResponse, GenerateStreamEvent,
-        GenerateStreamFinishEvent, GenerateStreamStartEvent, GenerateStreamTextDeltaEvent,
-        GenerateStreamToolCallEvent, GenerateStreamToolResultEvent, StartWorkflowRunRequest,
-        UsageStats, WorkflowSummary,
+        AgentDetail, AgentSummary, ExecuteToolRequest, ExecuteToolResponse, FinishReason,
+        GenerateRequest, GenerateResponse, GenerateStreamEvent, GenerateStreamFinishEvent,
+        GenerateStreamStartEvent, GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent,
+        GenerateStreamToolResultEvent, StartWorkflowRunRequest, ToolSummary, UsageStats,
+        WorkflowDetail, WorkflowStepSummary, WorkflowSummary,
     },
     error::{ServerError, ServerResult},
 };
@@ -22,17 +24,78 @@ use crate::{
 pub trait AgentRuntime: Send + Sync {
     fn summary(&self) -> AgentSummary;
 
+    fn detail(&self) -> AgentDetail {
+        let summary = self.summary();
+        AgentDetail {
+            id: summary.id,
+            name: summary.name,
+            instructions: String::new(),
+            description: summary.description,
+            tools: self.tool_summaries(),
+        }
+    }
+
+    fn tools(&self) -> Vec<Tool> {
+        Vec::new()
+    }
+
+    fn tool_summaries(&self) -> Vec<ToolSummary> {
+        self.tools().iter().map(ToolSummary::from_tool).collect()
+    }
+
     async fn generate(&self, request: GenerateRequest) -> ServerResult<GenerateResponse>;
 
     fn stream(
         &self,
         request: GenerateRequest,
     ) -> BoxStream<'static, ServerResult<GenerateStreamEvent>>;
+
+    async fn execute_tool(
+        &self,
+        tool_id: &str,
+        request: ExecuteToolRequest,
+    ) -> ServerResult<ExecuteToolResponse> {
+        let tool = self
+            .tools()
+            .into_iter()
+            .find(|tool| tool.id() == tool_id)
+            .ok_or_else(|| ServerError::NotFound {
+                resource: "tool",
+                id: tool_id.to_owned(),
+            })?;
+
+        let output = tool
+            .execute(
+                request.data,
+                ToolExecutionContext {
+                    request_context: RequestContext::from_value_map(request.request_context),
+                    run_id: request.run_id,
+                    thread_id: request.thread_id,
+                    approved: request.approved,
+                },
+            )
+            .await
+            .map_err(ServerError::internal)?;
+
+        Ok(ExecuteToolResponse {
+            tool_id: tool_id.to_owned(),
+            output,
+        })
+    }
 }
 
 #[async_trait]
 pub trait WorkflowRuntime: Send + Sync {
     fn summary(&self) -> WorkflowSummary;
+
+    fn detail(&self) -> WorkflowDetail {
+        let summary = self.summary();
+        WorkflowDetail {
+            id: summary.id,
+            description: summary.description,
+            steps: Vec::new(),
+        }
+    }
 
     async fn start(&self, request: StartWorkflowRunRequest) -> ServerResult<Value>;
 }
@@ -56,6 +119,20 @@ impl AgentRuntime for CoreAgentRuntime {
             name: self.agent.name().to_string(),
             description: self.agent.description().map(str::to_string),
         }
+    }
+
+    fn detail(&self) -> AgentDetail {
+        AgentDetail {
+            id: self.agent.id().to_string(),
+            name: self.agent.name().to_string(),
+            instructions: self.agent.instructions().to_string(),
+            description: self.agent.description().map(str::to_string),
+            tools: self.tool_summaries(),
+        }
+    }
+
+    fn tools(&self) -> Vec<Tool> {
+        self.agent.tools().to_vec()
     }
 
     async fn generate(&self, request: GenerateRequest) -> ServerResult<GenerateResponse> {
@@ -187,6 +264,22 @@ impl WorkflowRuntime for CoreWorkflowRuntime {
         WorkflowSummary {
             id: self.workflow.id().to_string(),
             description: None,
+        }
+    }
+
+    fn detail(&self) -> WorkflowDetail {
+        WorkflowDetail {
+            id: self.workflow.id().to_string(),
+            description: None,
+            steps: self
+                .workflow
+                .steps()
+                .iter()
+                .map(|step| WorkflowStepSummary {
+                    id: step.id().to_string(),
+                    description: step.description().map(str::to_string),
+                })
+                .collect(),
         }
     }
 

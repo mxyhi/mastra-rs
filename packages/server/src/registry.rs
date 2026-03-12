@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use mastra_core::MemoryEngine;
+use mastra_core::{MemoryEngine, Tool};
 use parking_lot::RwLock;
 use uuid::Uuid;
 
 use crate::{
     contracts::{
         AgentSummary, CreateWorkflowRunRequest, MemorySummary, StartWorkflowRunRequest,
-        WorkflowRunRecord, WorkflowRunStatus, WorkflowSummary,
+        ToolSummary, WorkflowRunRecord, WorkflowRunStatus, WorkflowSummary,
     },
     error::{ServerError, ServerResult},
     runtime::{AgentRuntime, WorkflowRuntime},
@@ -18,6 +18,7 @@ use crate::{
 pub struct RuntimeRegistry {
     agents: Arc<RwLock<IndexMap<String, Arc<dyn AgentRuntime>>>>,
     memory: Arc<RwLock<IndexMap<String, Arc<dyn MemoryEngine>>>>,
+    tools: Arc<RwLock<IndexMap<String, Tool>>>,
     workflows: Arc<RwLock<IndexMap<String, Arc<dyn WorkflowRuntime>>>>,
     workflow_runs: Arc<RwLock<IndexMap<Uuid, WorkflowRunRecord>>>,
 }
@@ -51,6 +52,10 @@ impl RuntimeRegistry {
         self.memory.write().insert(memory_id.into(), memory);
     }
 
+    pub fn register_tool(&self, tool: Tool) {
+        self.tools.write().insert(tool.id().to_owned(), tool);
+    }
+
     pub fn list_agents(&self) -> Vec<AgentSummary> {
         self.agents
             .read()
@@ -74,6 +79,24 @@ impl RuntimeRegistry {
             .cloned()
             .map(|id| MemorySummary { id })
             .collect()
+    }
+
+    pub fn list_tools(&self) -> Vec<ToolSummary> {
+        let mut tools = IndexMap::new();
+
+        for tool in self.tools.read().values() {
+            tools
+                .entry(tool.id().to_owned())
+                .or_insert_with(|| ToolSummary::from_tool(tool));
+        }
+
+        for agent in self.agents.read().values() {
+            for tool in agent.tool_summaries() {
+                tools.entry(tool.id.clone()).or_insert(tool);
+            }
+        }
+
+        tools.into_values().collect()
     }
 
     pub fn find_agent(&self, agent_id: &str) -> ServerResult<Arc<dyn AgentRuntime>> {
@@ -107,6 +130,27 @@ impl RuntimeRegistry {
                 resource: "memory",
                 id: memory_id.to_owned(),
             })
+    }
+
+    pub fn find_tool(&self, tool_id: &str) -> ServerResult<Tool> {
+        if let Some(tool) = self.tools.read().get(tool_id).cloned() {
+            return Ok(tool);
+        }
+
+        for agent in self.agents.read().values() {
+            if let Some(tool) = agent.tools().into_iter().find(|tool| tool.id() == tool_id) {
+                return Ok(tool);
+            }
+        }
+
+        Err(ServerError::NotFound {
+            resource: "tool",
+            id: tool_id.to_owned(),
+        })
+    }
+
+    pub fn get_tool_summary(&self, tool_id: &str) -> ServerResult<ToolSummary> {
+        Ok(ToolSummary::from_tool(&self.find_tool(tool_id)?))
     }
 
     pub fn create_workflow_run(

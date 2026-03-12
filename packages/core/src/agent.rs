@@ -123,6 +123,10 @@ impl Agent {
             .collect()
     }
 
+    pub fn tools(&self) -> &[Tool] {
+        &self.tools
+    }
+
     pub async fn generate(&self, request: AgentGenerateRequest) -> Result<AgentResponse> {
         let AgentGenerateRequest {
             prompt,
@@ -170,7 +174,8 @@ impl Agent {
                 if let Some(usage) = aggregated_usage.clone() {
                     response.usage = Some(usage);
                 }
-                self.persist_response(&thread_id, &prompt, &response).await?;
+                self.persist_response(&thread_id, &prompt, &tool_results, &response)
+                    .await?;
                 return Ok(self.to_agent_response(response, run_id, thread_id, tool_names));
             }
 
@@ -245,7 +250,9 @@ impl Agent {
                         if let Some(usage) = aggregated_usage.clone() {
                             response.usage = Some(usage);
                         }
-                        agent.persist_response(&thread_id, &prompt, &response).await?;
+                        agent
+                            .persist_response(&thread_id, &prompt, &tool_results, &response)
+                            .await?;
                         yield AgentStreamResponse {
                             id: agent.id.clone(),
                             event: ModelEvent::Done(response),
@@ -327,7 +334,7 @@ impl Agent {
                             let event = event?;
                             if let ModelEvent::Done(response) = &event {
                                 agent
-                                    .persist_response(&thread_id, &prompt, response)
+                                    .persist_response(&thread_id, &prompt, &[], response)
                                     .await?;
                             }
 
@@ -449,6 +456,7 @@ impl Agent {
         &self,
         thread_id: &Option<String>,
         prompt: &str,
+        tool_results: &[ModelToolResult],
         response: &ModelResponse,
     ) -> Result<()> {
         let Some(memory) = &self.memory else {
@@ -463,30 +471,45 @@ impl Agent {
             return Ok(());
         };
 
-        // Persist both sides of the exchange together so recall order remains stable.
-        memory
-            .append_messages(
-                thread_id,
-                vec![
-                    MemoryMessage {
-                        id: Uuid::now_v7().to_string(),
-                        thread_id: thread_id.clone(),
-                        role: MemoryRole::User,
-                        content: prompt.to_string(),
-                        created_at: chrono::Utc::now(),
-                        metadata: Value::Null,
-                    },
-                    MemoryMessage {
-                        id: Uuid::now_v7().to_string(),
-                        thread_id: thread_id.clone(),
-                        role: MemoryRole::Assistant,
-                        content: response.text.clone(),
-                        created_at: chrono::Utc::now(),
-                        metadata: response.data.clone(),
-                    },
-                ],
-            )
-            .await
+        // Keep tool outputs between the user turn and the final assistant reply so replayed
+        // memory matches the tool loop that the model observed.
+        let mut messages = Vec::with_capacity(tool_results.len() + 2);
+        messages.push(MemoryMessage {
+            id: Uuid::now_v7().to_string(),
+            thread_id: thread_id.clone(),
+            role: MemoryRole::User,
+            content: prompt.to_string(),
+            created_at: chrono::Utc::now(),
+            metadata: Value::Null,
+        });
+
+        for result in tool_results {
+            messages.push(MemoryMessage {
+                id: Uuid::now_v7().to_string(),
+                thread_id: thread_id.clone(),
+                role: MemoryRole::Tool,
+                content: match &result.output {
+                    Value::String(text) => text.clone(),
+                    value => value.to_string(),
+                },
+                created_at: chrono::Utc::now(),
+                metadata: json!({
+                    "tool_name": result.name,
+                    "tool_call_id": result.id,
+                }),
+            });
+        }
+
+        messages.push(MemoryMessage {
+            id: Uuid::now_v7().to_string(),
+            thread_id: thread_id.clone(),
+            role: MemoryRole::Assistant,
+            content: response.text.clone(),
+            created_at: chrono::Utc::now(),
+            metadata: response.data.clone(),
+        });
+
+        memory.append_messages(thread_id, messages).await
     }
 
     pub fn snapshot(&self) -> Value {
@@ -776,6 +799,119 @@ mod tests {
         assert!(model_requests[0].tool_results.is_empty());
         assert_eq!(model_requests[0].run_id.as_deref(), Some("run-123"));
         assert_eq!(model_requests[0].thread_id.as_deref(), Some("thread-123"));
+    }
+
+    #[test]
+    fn tools_accessor_returns_registered_tools_in_order() {
+        let agent = Agent::new(AgentConfig {
+            id: "tool-accessor".into(),
+            name: "Tool Accessor".into(),
+            instructions: "Use tools when helpful".into(),
+            description: None,
+            model: Arc::new(StaticModel::new(|_request| async move {
+                Ok(ModelResponse {
+                    text: String::new(),
+                    data: Value::Null,
+                    finish_reason: FinishReason::Stop,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                })
+            })),
+            tools: vec![
+                Tool::new("sum", "add numbers", |_input, _context| async move {
+                    Ok(json!(3))
+                }),
+                Tool::new(
+                    "product",
+                    "multiply numbers",
+                    |_input, _context| async move { Ok(json!(6)) },
+                ),
+            ],
+            memory: None,
+            memory_config: MemoryConfig::default(),
+        });
+
+        let tools = agent.tools();
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].id(), "sum");
+        assert_eq!(tools[1].id(), "product");
+    }
+
+    #[tokio::test]
+    async fn generate_persists_tool_results_into_memory_before_assistant_reply() {
+        let memory = Arc::new(RecordingMemory::default());
+        let model = StaticModel::new(|request| async move {
+            match request.tool_results.as_slice() {
+                [] => Ok(ModelResponse {
+                    text: String::new(),
+                    data: Value::Null,
+                    finish_reason: FinishReason::ToolCall,
+                    usage: None,
+                    tool_calls: vec![ModelToolCall {
+                        id: "tool-call-1".into(),
+                        name: "sum".into(),
+                        input: json!({ "a": 6, "b": 7 }),
+                    }],
+                }),
+                [_result] => Ok(ModelResponse {
+                    text: "13".into(),
+                    data: json!({ "source": "tool-memory" }),
+                    finish_reason: FinishReason::Stop,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                }),
+                other => panic!("unexpected tool results: {other:?}"),
+            }
+        });
+        let agent = Agent::new(AgentConfig {
+            id: "tool-memory".into(),
+            name: "Tool Memory".into(),
+            instructions: "Use tools when helpful".into(),
+            description: None,
+            model: Arc::new(model),
+            tools: vec![Tool::new(
+                "sum",
+                "add numbers",
+                |input, _context| async move {
+                    let a = input.get("a").and_then(Value::as_i64).unwrap_or_default();
+                    let b = input.get("b").and_then(Value::as_i64).unwrap_or_default();
+                    Ok(json!(a + b))
+                },
+            )],
+            memory: Some(memory.clone()),
+            memory_config: MemoryConfig::default(),
+        });
+
+        let response = agent
+            .generate(AgentGenerateRequest {
+                prompt: "6 + 7 = ?".into(),
+                thread_id: Some("thread-tool-memory".into()),
+                resource_id: None,
+                run_id: Some("run-tool-memory".into()),
+                max_steps: Some(4),
+                request_context: RequestContext::new(),
+            })
+            .await
+            .expect("agent should resolve tool loop");
+
+        assert_eq!(response.text, "13");
+
+        let persisted = memory
+            .list_messages(MemoryRecallRequest {
+                thread_id: "thread-tool-memory".into(),
+                limit: None,
+            })
+            .await
+            .expect("messages should be persisted");
+
+        assert_eq!(persisted.len(), 3);
+        assert_eq!(persisted[0].role, MemoryRole::User);
+        assert_eq!(persisted[1].role, MemoryRole::Tool);
+        assert_eq!(persisted[1].metadata["tool_name"], "sum");
+        assert_eq!(persisted[1].metadata["tool_call_id"], "tool-call-1");
+        assert_eq!(persisted[1].content, "13");
+        assert_eq!(persisted[2].role, MemoryRole::Assistant);
+        assert_eq!(persisted[2].content, "13");
     }
 
     #[tokio::test]

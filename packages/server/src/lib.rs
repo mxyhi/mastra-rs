@@ -7,7 +7,7 @@ mod runtime;
 use std::{net::SocketAddr, sync::Arc};
 
 use axum::Router;
-use mastra_core::{Agent, MemoryEngine, Workflow};
+use mastra_core::{Agent, MemoryEngine, Tool, Workflow};
 use registry::RuntimeRegistry;
 use runtime::{CoreAgentRuntime, CoreWorkflowRuntime};
 
@@ -15,7 +15,7 @@ pub use contracts::{
     AgentMessages, AgentSummary, ChatMessage, ErrorResponse, FinishReason, GenerateResponse,
     GenerateStreamEvent, GenerateStreamFinishEvent, GenerateStreamStartEvent,
     GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent, GenerateStreamToolResultEvent,
-    RouteDescription, StartWorkflowRunResponse as WorkflowRunResponse, UsageStats,
+    RouteDescription, StartWorkflowRunResponse as WorkflowRunResponse, ToolSummary, UsageStats,
     WorkflowRunRecord, WorkflowRunStatus, WorkflowSummary,
 };
 pub use error::ServerError as MastraServerError;
@@ -46,6 +46,10 @@ impl MastraHttpServer {
     pub fn register_workflow(&self, workflow: Workflow) {
         self.registry
             .register_workflow(CoreWorkflowRuntime::new(workflow));
+    }
+
+    pub fn register_tool(&self, tool: Tool) {
+        self.registry.register_tool(tool);
     }
 
     pub fn register_memory(&self, id: impl Into<String>, memory: Arc<dyn MemoryEngine>) {

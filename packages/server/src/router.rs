@@ -10,18 +10,20 @@ use axum::{
 use chrono::Utc;
 use futures::StreamExt;
 use mastra_core::{
-    Agent, CreateThreadRequest, MemoryEngine, MemoryMessage, MemoryRecallRequest, Workflow,
+    Agent, CreateThreadRequest, MemoryEngine, MemoryMessage, MemoryRecallRequest, Tool, Workflow,
 };
 use tracing::instrument;
 use uuid::Uuid;
 
 use crate::{
     contracts::{
-        AppendMemoryMessagesRequest, AppendMemoryMessagesResponse, CreateMemoryThreadRequest,
-        CreateMemoryThreadResponse, CreateWorkflowRunRequest, ErrorResponse, GenerateRequest,
+        AgentDetailResponse, AppendMemoryMessagesRequest, AppendMemoryMessagesResponse,
+        CreateMemoryThreadRequest, CreateMemoryThreadResponse, CreateWorkflowRunRequest,
+        ErrorResponse, ExecuteToolRequest, ExecuteToolResponse, GenerateRequest,
         GenerateStreamEvent, ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse,
-        ListThreadsResponse, ListWorkflowsResponse, RouteDescription, StartWorkflowRunRequest,
-        StartWorkflowRunResponse, WorkflowRunRecord,
+        ListThreadsResponse, ListToolsResponse, ListWorkflowsResponse, RouteDescription,
+        StartWorkflowRunRequest, StartWorkflowRunResponse, WorkflowDetailResponse,
+        WorkflowRunRecord,
     },
     error::{ServerError, ServerResult},
     registry::RuntimeRegistry,
@@ -83,6 +85,10 @@ impl MastraServer {
             .register_workflow(CoreWorkflowRuntime::new(workflow));
     }
 
+    pub fn register_tool(&self, tool: Tool) {
+        self.registry.register_tool(tool);
+    }
+
     pub fn register_memory(&self, memory_id: impl Into<String>, memory: Arc<dyn MemoryEngine>) {
         self.registry.register_memory(memory_id, memory);
     }
@@ -96,9 +102,18 @@ impl MastraServer {
             .route("/health", get(health))
             .route("/routes", get(routes))
             .route("/agents", get(list_agents))
+            .route("/agents/{agent_id}", get(get_agent))
             .route("/agents/{agent_id}/generate", post(generate_agent))
             .route("/agents/{agent_id}/stream", post(stream_agent))
+            .route("/agents/{agent_id}/tools", get(list_agent_tools))
+            .route(
+                "/agents/{agent_id}/tools/{tool_id}/execute",
+                post(execute_agent_tool),
+            )
             .route("/memories", get(list_memories))
+            .route("/tools", get(list_tools))
+            .route("/tools/{tool_id}", get(get_tool))
+            .route("/tools/{tool_id}/execute", post(execute_tool))
             .route(
                 "/memory/{memory_id}/threads",
                 get(list_memory_threads).post(create_memory_thread),
@@ -112,6 +127,7 @@ impl MastraServer {
                 "/workflows/{workflow_id}/create-run",
                 post(create_workflow_run),
             )
+            .route("/workflows/{workflow_id}", get(get_workflow))
             .route(
                 "/workflows/{workflow_id}/start-async",
                 post(start_workflow_async),
@@ -149,6 +165,7 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
         ("GET", "/health", "Health check"),
         ("GET", "/routes", "List registered routes"),
         ("GET", "/agents", "List registered agents"),
+        ("GET", "/agents/{agent_id}", "Get a registered agent"),
         (
             "POST",
             "/agents/{agent_id}/generate",
@@ -159,7 +176,24 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
             "/agents/{agent_id}/stream",
             "Stream an agent response",
         ),
+        (
+            "GET",
+            "/agents/{agent_id}/tools",
+            "List the tools registered on an agent",
+        ),
+        (
+            "POST",
+            "/agents/{agent_id}/tools/{tool_id}/execute",
+            "Execute a tool from an agent",
+        ),
         ("GET", "/memories", "List registered memories"),
+        ("GET", "/tools", "List registered tools"),
+        ("GET", "/tools/{tool_id}", "Get a registered tool"),
+        (
+            "POST",
+            "/tools/{tool_id}/execute",
+            "Execute a registered tool",
+        ),
         ("GET", "/memory/{memory_id}/threads", "List memory threads"),
         (
             "POST",
@@ -177,6 +211,11 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
             "Append messages to a memory thread",
         ),
         ("GET", "/workflows", "List registered workflows"),
+        (
+            "GET",
+            "/workflows/{workflow_id}",
+            "Get a registered workflow",
+        ),
         (
             "POST",
             "/workflows/{workflow_id}/create-run",
@@ -226,6 +265,17 @@ async fn list_agents(State(state): State<AppState>) -> Json<ListAgentsResponse> 
     })
 }
 
+#[instrument(skip(state))]
+async fn get_agent(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> ServerResult<Json<AgentDetailResponse>> {
+    let agent = state.registry.find_agent(&agent_id)?;
+    Ok(Json(AgentDetailResponse {
+        agent: agent.detail(),
+    }))
+}
+
 #[instrument(skip(state, request))]
 async fn generate_agent(
     State(state): State<AppState>,
@@ -258,6 +308,28 @@ async fn stream_agent(
 }
 
 #[instrument(skip(state))]
+async fn list_agent_tools(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> ServerResult<Json<ListToolsResponse>> {
+    let agent = state.registry.find_agent(&agent_id)?;
+    Ok(Json(ListToolsResponse {
+        tools: agent.tool_summaries(),
+    }))
+}
+
+#[instrument(skip(state, request))]
+async fn execute_agent_tool(
+    State(state): State<AppState>,
+    Path((agent_id, tool_id)): Path<(String, String)>,
+    Json(request): Json<ExecuteToolRequest>,
+) -> ServerResult<Json<ExecuteToolResponse>> {
+    let agent = state.registry.find_agent(&agent_id)?;
+    let response = agent.execute_tool(&tool_id, request).await?;
+    Ok(Json(response))
+}
+
+#[instrument(skip(state))]
 async fn list_workflows(State(state): State<AppState>) -> Json<ListWorkflowsResponse> {
     Json(ListWorkflowsResponse {
         workflows: state.registry.list_workflows(),
@@ -265,10 +337,61 @@ async fn list_workflows(State(state): State<AppState>) -> Json<ListWorkflowsResp
 }
 
 #[instrument(skip(state))]
+async fn get_workflow(
+    State(state): State<AppState>,
+    Path(workflow_id): Path<String>,
+) -> ServerResult<Json<WorkflowDetailResponse>> {
+    let workflow = state.registry.find_workflow(&workflow_id)?;
+    Ok(Json(WorkflowDetailResponse {
+        workflow: workflow.detail(),
+    }))
+}
+
+#[instrument(skip(state))]
 async fn list_memories(State(state): State<AppState>) -> Json<ListMemoriesResponse> {
     Json(ListMemoriesResponse {
         memories: state.registry.list_memory(),
     })
+}
+
+#[instrument(skip(state))]
+async fn list_tools(State(state): State<AppState>) -> Json<ListToolsResponse> {
+    Json(ListToolsResponse {
+        tools: state.registry.list_tools(),
+    })
+}
+
+#[instrument(skip(state))]
+async fn get_tool(
+    State(state): State<AppState>,
+    Path(tool_id): Path<String>,
+) -> ServerResult<Json<crate::contracts::ToolSummary>> {
+    Ok(Json(state.registry.get_tool_summary(&tool_id)?))
+}
+
+#[instrument(skip(state, request))]
+async fn execute_tool(
+    State(state): State<AppState>,
+    Path(tool_id): Path<String>,
+    Json(request): Json<ExecuteToolRequest>,
+) -> ServerResult<Json<ExecuteToolResponse>> {
+    let tool = state.registry.find_tool(&tool_id)?;
+    let output = tool
+        .execute(
+            request.data,
+            mastra_core::ToolExecutionContext {
+                request_context: mastra_core::RequestContext::from_value_map(
+                    request.request_context,
+                ),
+                run_id: request.run_id,
+                thread_id: request.thread_id,
+                approved: request.approved,
+            },
+        )
+        .await
+        .map_err(ServerError::internal)?;
+
+    Ok(Json(ExecuteToolResponse { tool_id, output }))
 }
 
 #[instrument(skip(state))]
@@ -462,8 +585,18 @@ mod tests {
         fn summary(&self) -> AgentSummary {
             AgentSummary {
                 id: "echo".to_owned(),
-                name: "Echo".to_owned(),
+                name: "Echo Agent".to_owned(),
                 description: Some("Echoes flattened input".to_owned()),
+            }
+        }
+
+        fn detail(&self) -> crate::contracts::AgentDetail {
+            crate::contracts::AgentDetail {
+                id: "echo".to_owned(),
+                name: "Echo Agent".to_owned(),
+                instructions: "Echoes the prompt".to_owned(),
+                description: Some("Echoes flattened input".to_owned()),
+                tools: Vec::new(),
             }
         }
 
@@ -520,6 +653,14 @@ mod tests {
             WorkflowSummary {
                 id: "demo".to_owned(),
                 description: Some("Returns workflow input".to_owned()),
+            }
+        }
+
+        fn detail(&self) -> crate::contracts::WorkflowDetail {
+            crate::contracts::WorkflowDetail {
+                id: "demo".to_owned(),
+                description: Some("Returns workflow input".to_owned()),
+                steps: Vec::new(),
             }
         }
 
@@ -616,6 +757,184 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let payload: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(payload["agents"][0]["id"], "echo");
+    }
+
+    #[tokio::test]
+    async fn exposes_agent_and_workflow_details() {
+        let agent_response = build_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/agents/echo")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(agent_response.status(), StatusCode::OK);
+        let agent_body = to_bytes(agent_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let agent_payload: Value = serde_json::from_slice(&agent_body).unwrap();
+        assert_eq!(agent_payload["agent"]["id"], "echo");
+        assert_eq!(agent_payload["agent"]["name"], "Echo Agent");
+        assert_eq!(agent_payload["agent"]["instructions"], "Echoes the prompt");
+
+        let workflow_response = build_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/workflows/demo")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(workflow_response.status(), StatusCode::OK);
+        let workflow_body = to_bytes(workflow_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let workflow_payload: Value = serde_json::from_slice(&workflow_body).unwrap();
+        assert_eq!(workflow_payload["workflow"]["id"], "demo");
+        assert_eq!(
+            workflow_payload["workflow"]["description"],
+            "Returns workflow input"
+        );
+    }
+
+    #[tokio::test]
+    async fn lists_and_executes_agent_and_global_tools() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_agent(Agent::new(AgentConfig {
+            id: "calculator".to_owned(),
+            name: "Calculator".to_owned(),
+            instructions: "Use arithmetic tools".to_owned(),
+            description: Some("Provides arithmetic helpers".to_owned()),
+            model: Arc::new(StaticModel::echo()),
+            tools: vec![Tool::new(
+                "sum",
+                "add numbers",
+                |input, _context| async move {
+                    let a = input.get("a").and_then(Value::as_i64).unwrap_or_default();
+                    let b = input.get("b").and_then(Value::as_i64).unwrap_or_default();
+                    Ok(json!(a + b))
+                },
+            )],
+            memory: None,
+            memory_config: MemoryConfig::default(),
+        }));
+        server.register_tool(Tool::new(
+            "ping",
+            "ping the service",
+            |_input, _context| async move { Ok(json!({ "pong": true })) },
+        ));
+        let router = server.into_router();
+
+        let tools_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/tools")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(tools_response.status(), StatusCode::OK);
+        let tools_body = to_bytes(tools_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let tools_payload: Value = serde_json::from_slice(&tools_body).unwrap();
+        assert_eq!(tools_payload["tools"].as_array().unwrap().len(), 2);
+        assert!(
+            tools_payload["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["id"] == "sum")
+        );
+        assert!(
+            tools_payload["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["id"] == "ping")
+        );
+
+        let agent_tools_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/agents/calculator/tools")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(agent_tools_response.status(), StatusCode::OK);
+        let agent_tools_body = to_bytes(agent_tools_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let agent_tools_payload: Value = serde_json::from_slice(&agent_tools_body).unwrap();
+        assert_eq!(agent_tools_payload["tools"][0]["id"], "sum");
+
+        let execute_agent_tool = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/agents/calculator/tools/sum/execute")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "data": { "a": 20, "b": 22 }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(execute_agent_tool.status(), StatusCode::OK);
+        let execute_agent_tool_body = to_bytes(execute_agent_tool.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let execute_agent_tool_payload: Value =
+            serde_json::from_slice(&execute_agent_tool_body).unwrap();
+        assert_eq!(execute_agent_tool_payload["tool_id"], "sum");
+        assert_eq!(execute_agent_tool_payload["output"], json!(42));
+
+        let execute_global_tool = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tools/ping/execute")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "data": { "source": "test" }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(execute_global_tool.status(), StatusCode::OK);
+        let execute_global_tool_body = to_bytes(execute_global_tool.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let execute_global_tool_payload: Value =
+            serde_json::from_slice(&execute_global_tool_body).unwrap();
+        assert_eq!(execute_global_tool_payload["tool_id"], "ping");
+        assert_eq!(
+            execute_global_tool_payload["output"],
+            json!({ "pong": true })
+        );
     }
 
     #[tokio::test]

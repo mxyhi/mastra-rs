@@ -1,5 +1,5 @@
 use indexmap::IndexMap;
-use mastra_core::{MemoryMessage, Thread};
+use mastra_core::{MemoryMessage, Thread, Tool};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -20,6 +20,62 @@ pub struct WorkflowSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MemorySummary {
     pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolSummary {
+    pub id: String,
+    pub description: String,
+    #[serde(default)]
+    pub require_approval: bool,
+    #[serde(default)]
+    pub input_schema: Option<Value>,
+    #[serde(default)]
+    pub output_schema: Option<Value>,
+}
+
+impl ToolSummary {
+    pub fn from_tool(tool: &Tool) -> Self {
+        Self {
+            id: tool.id().to_owned(),
+            description: tool.description().to_owned(),
+            require_approval: tool.requires_approval(),
+            input_schema: tool.input_schema().cloned(),
+            output_schema: tool.output_schema().cloned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentDetail {
+    pub id: String,
+    pub name: String,
+    pub instructions: String,
+    pub description: Option<String>,
+    pub tools: Vec<ToolSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentDetailResponse {
+    pub agent: AgentDetail,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowStepSummary {
+    pub id: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowDetail {
+    pub id: String,
+    pub description: Option<String>,
+    pub steps: Vec<WorkflowStepSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowDetailResponse {
+    pub workflow: WorkflowDetail,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -214,6 +270,30 @@ pub struct ListWorkflowsResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListMemoriesResponse {
     pub memories: Vec<MemorySummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ListToolsResponse {
+    pub tools: Vec<ToolSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExecuteToolRequest {
+    pub data: Value,
+    #[serde(default)]
+    pub approved: bool,
+    #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    #[serde(default)]
+    pub request_context: IndexMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExecuteToolResponse {
+    pub tool_id: String,
+    pub output: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -90,6 +90,18 @@ impl Tool {
         &self.description
     }
 
+    pub fn input_schema(&self) -> Option<&Value> {
+        self.input_schema.as_ref()
+    }
+
+    pub fn output_schema(&self) -> Option<&Value> {
+        self.output_schema.as_ref()
+    }
+
+    pub fn requires_approval(&self) -> bool {
+        self.require_approval
+    }
+
     pub fn schema_snapshot(&self) -> Value {
         json!({
           "input": self.input_schema,
