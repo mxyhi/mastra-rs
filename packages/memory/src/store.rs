@@ -3,8 +3,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::model::{
-    AppendMessageRequest, HistoryQuery, ListMessagesQuery, ListThreadsQuery, Message, MessagePage, Pagination, Thread,
-    ThreadPage,
+    AppendMessageRequest, CreateThreadRequest, HistoryQuery, ListMessagesQuery, ListThreadsQuery,
+    Message, MessagePage, Pagination, Thread, ThreadPage,
 };
 
 pub type MemoryStoreResult<T> = Result<T, MemoryStoreError>;
@@ -19,7 +19,7 @@ pub enum MemoryStoreError {
 
 #[async_trait]
 pub trait MemoryStore: Send + Sync {
-    async fn create_thread(&self, input: crate::CreateThreadRequest) -> MemoryStoreResult<Thread>;
+    async fn create_thread(&self, input: CreateThreadRequest) -> MemoryStoreResult<Thread>;
 
     async fn get_thread(&self, thread_id: Uuid) -> MemoryStoreResult<Option<Thread>>;
 

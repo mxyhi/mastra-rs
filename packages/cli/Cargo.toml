@@ -8,5 +8,6 @@ publish.workspace = true
 [dependencies]
 clap.workspace = true
 mastra-core = { path = "../core" }
+mastra-loggers = { path = "../loggers" }
 mastra-server = { path = "../server" }
 tokio.workspace = true

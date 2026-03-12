@@ -673,6 +673,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "mastra-core",
+ "mastra-loggers",
  "mastra-server",
  "tokio",
 ]
@@ -903,14 +904,19 @@ name = "mastra-server"
 version = "0.1.0"
 dependencies = [
  "async-stream",
+ "async-trait",
  "axum",
  "futures",
+ "indexmap",
  "mastra-core",
+ "parking_lot",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -942,11 +948,13 @@ version = "0.1.0"
 name = "mastra-store-libsql"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "mastra-core",
  "mastra-memory",
  "parking_lot",
  "serde",
  "serde_json",
+ "tokio",
  "uuid",
 ]
 
@@ -954,11 +962,13 @@ dependencies = [
 name = "mastra-store-pg"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "mastra-core",
  "mastra-memory",
  "parking_lot",
  "serde",
  "serde_json",
+ "tokio",
  "uuid",
 ]
 

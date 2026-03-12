@@ -7,10 +7,10 @@ use parking_lot::RwLock;
 use uuid::Uuid;
 
 use crate::model::{
-    AppendMessageRequest, CreateThreadRequest, HistoryQuery, ListMessagesQuery, ListThreadsQuery, Message, MessagePage,
-    Thread, ThreadPage,
+    AppendMessageRequest, CreateThreadRequest, HistoryQuery, ListMessagesQuery, ListThreadsQuery,
+    Message, MessagePage, Thread, ThreadPage,
 };
-use crate::store::{ensure_valid_pagination, MemoryStore, MemoryStoreError, MemoryStoreResult};
+use crate::store::{MemoryStore, MemoryStoreError, MemoryStoreResult, ensure_valid_pagination};
 
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryMemoryStore {
@@ -106,7 +106,11 @@ impl MemoryStore for InMemoryMemoryStore {
         };
 
         thread.updated_at = message.created_at;
-        state.messages.entry(input.thread_id).or_default().push(message.clone());
+        state
+            .messages
+            .entry(input.thread_id)
+            .or_default()
+            .push(message.clone());
 
         Ok(message)
     }

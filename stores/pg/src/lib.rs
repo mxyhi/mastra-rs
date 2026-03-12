@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use mastra_memory::{
-    AppendMessageRequest, CreateThreadRequest, HistoryQuery, InMemoryMemoryStore, ListMessagesQuery, ListThreadsQuery,
-    MemoryStore, MemoryStoreResult, Message, MessagePage, Thread, ThreadPage,
+    AppendMessageRequest, CreateThreadRequest, HistoryQuery, InMemoryMemoryStore,
+    ListMessagesQuery, ListThreadsQuery, MemoryStore, MemoryStoreResult, Message, MessagePage,
+    Thread, ThreadPage,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

@@ -75,11 +75,16 @@ pub struct DocumentChunk {
 pub enum ChunkError {
     #[error("document text cannot be empty")]
     EmptyDocument,
-    #[error("chunk options are invalid: max_chars must be > 0 and overlap_chars must be smaller than max_chars")]
+    #[error(
+        "chunk options are invalid: max_chars must be > 0 and overlap_chars must be smaller than max_chars"
+    )]
     InvalidOptions,
 }
 
-pub fn chunk_document(document: &MDocument, options: &ChunkOptions) -> Result<Vec<DocumentChunk>, ChunkError> {
+pub fn chunk_document(
+    document: &MDocument,
+    options: &ChunkOptions,
+) -> Result<Vec<DocumentChunk>, ChunkError> {
     if document.text.is_empty() {
         return Err(ChunkError::EmptyDocument);
     }
@@ -141,23 +146,32 @@ fn char_index_to_byte_offset(text: &str, char_index: usize) -> usize {
 mod tests {
     use serde_json::json;
 
-    use super::{chunk_document, ChunkError, ChunkOptions, MDocument};
+    use super::{ChunkError, ChunkOptions, MDocument, chunk_document};
 
     #[test]
     fn chunk_document_splits_text_with_overlap() {
         let document = MDocument::new("doc-1", "abcdefghij").with_metadata(json!({ "lang": "en" }));
-        let chunks = chunk_document(&document, &ChunkOptions::new(4, 1)).expect("chunking should work");
+        let chunks =
+            chunk_document(&document, &ChunkOptions::new(4, 1)).expect("chunking should work");
 
-        let payload = chunks.into_iter().map(|chunk| chunk.text).collect::<Vec<_>>();
+        let payload = chunks
+            .into_iter()
+            .map(|chunk| chunk.text)
+            .collect::<Vec<_>>();
         assert_eq!(payload, vec!["abcd", "defg", "ghij"]);
     }
 
     #[test]
     fn chunk_document_handles_unicode_char_boundaries() {
         let document = MDocument::new("doc-2", "你好世界欢迎你");
-        let chunks = document.chunk(&ChunkOptions::new(3, 1)).expect("chunking should work");
+        let chunks = document
+            .chunk(&ChunkOptions::new(3, 1))
+            .expect("chunking should work");
 
-        let payload = chunks.into_iter().map(|chunk| chunk.text).collect::<Vec<_>>();
+        let payload = chunks
+            .into_iter()
+            .map(|chunk| chunk.text)
+            .collect::<Vec<_>>();
         assert_eq!(payload, vec!["你好世", "世界欢", "欢迎你"]);
     }
 
