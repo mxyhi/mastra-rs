@@ -1,14 +1,18 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+use mastra_observability_mastra::{Attributes, TraceBatch};
+use mastra_observability_otel_exporter::build_otel_payload;
+use serde_json::Value;
+
+#[derive(Clone, Debug, Default)]
+pub struct OtelBridge {
+    pub resource_attributes: Attributes,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+impl OtelBridge {
+    pub fn new(resource_attributes: Attributes) -> Self {
+        Self { resource_attributes }
+    }
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+    pub fn to_payload(&self, batch: &TraceBatch) -> Value {
+        build_otel_payload(batch, &self.resource_attributes)
     }
 }

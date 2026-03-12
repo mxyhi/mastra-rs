@@ -1472,6 +1472,11 @@ dependencies = [
 [[package]]
 name = "mastra-observability--examples"
 version = "0.1.0"
+dependencies = [
+ "chrono",
+ "mastra-observability-mastra",
+ "serde_json",
+]
 
 [[package]]
 name = "mastra-observability--test-utils"
@@ -1490,10 +1495,24 @@ dependencies = [
 [[package]]
 name = "mastra-observability-arize"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "mastra-observability--test-utils",
+ "mastra-observability-mastra",
+ "mastra-observability-otel-exporter",
+ "serde_json",
+]
 
 [[package]]
 name = "mastra-observability-braintrust"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "mastra-observability--test-utils",
+ "mastra-observability-mastra",
+ "serde_json",
+ "url",
+]
 
 [[package]]
 name = "mastra-observability-datadog"
@@ -1511,6 +1530,13 @@ dependencies = [
 [[package]]
 name = "mastra-observability-laminar"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "mastra-observability--test-utils",
+ "mastra-observability-mastra",
+ "mastra-observability-otel-exporter",
+ "serde_json",
+]
 
 [[package]]
 name = "mastra-observability-langfuse"
@@ -1557,10 +1583,24 @@ dependencies = [
 [[package]]
 name = "mastra-observability-otel-bridge"
 version = "0.1.0"
+dependencies = [
+ "mastra-observability-mastra",
+ "mastra-observability-otel-exporter",
+ "serde_json",
+]
 
 [[package]]
 name = "mastra-observability-otel-exporter"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "mastra-observability--test-utils",
+ "mastra-observability-mastra",
+ "serde",
+ "serde_json",
+ "url",
+]
 
 [[package]]
 name = "mastra-observability-posthog"

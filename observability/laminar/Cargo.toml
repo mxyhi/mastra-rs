@@ -4,3 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+async-trait = { workspace = true }
+mastra-observability-mastra = { path = "../mastra" }
+mastra-observability-otel-exporter = { path = "../otel-exporter" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+mastra-observability--test-utils = { path = "../_test-utils" }
