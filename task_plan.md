@@ -33,9 +33,9 @@
 - [x] Phase 1: 已确认旧 planning 叙述失真，当前仓库不能直接认定为“1:1 parity 已完成”。
 - [x] Phase 2: 已完成目录、文件数、LOC、核心导出面与关键源码结构的对比。
 - [x] Phase 3: 结论已明确，差距规模远超“本轮一次性补齐”的现实范围。
-- [ ] Phase 4: 不启动伪完成式编码，先纠正基线与记录事实。
+- [x] Phase 4: 已停止基于错误完成假设的伪闭环编码。
 - [x] Phase 5: `cargo fmt --all --check` 与 `cargo test --workspace` 已通过。
-- [ ] Phase 6: 待生成审计 commit。
+- [x] Phase 6: 已生成审计 commit `78c7253 chore(plan): record parity reality check`。
 
 ## Evidence Anchors
 
@@ -59,3 +59,4 @@
 - `67dfacd feat(auth): add provider wrappers for auth crates`
 - `1c94530 feat(parity): add provider metadata and tooling clusters`
 - `4a2201f chore(fmt): normalize auth and observability formatting`
+- `78c7253 chore(plan): record parity reality check`

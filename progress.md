@@ -23,4 +23,6 @@
   - 当前仓通过了完整 workspace 回归，但仍明显是 parity skeleton。
   - 差距主要集中在 `packages/core`、`packages/server`、`packages/memory`、`packages/cli`、`packages/rag`、`packages/mcp`、`mastracode`。
 - 旧的 `findings.md` 在工作树中处于删除态；本轮重新补建，并把 planning files 全部改写为真实性审计基线。
-- 下一步是生成审计 commit，固定“当前不是 1:1 完成”的事实状态。
+- 生成提交：
+  - `78c7253 chore(plan): record parity reality check`
+- 当前工作树重新回到干净状态，但结论没有变化：当前仓仍不是 “Mastra 1:1 完成”。
