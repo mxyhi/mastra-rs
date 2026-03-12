@@ -152,6 +152,18 @@ impl Step {
   pub fn id(&self) -> &str {
     &self.id
   }
+
+  pub fn description(&self) -> Option<&str> {
+    self.description.as_deref()
+  }
+
+  pub fn input_schema(&self) -> Option<&Value> {
+    self.input_schema.as_ref()
+  }
+
+  pub fn output_schema(&self) -> Option<&Value> {
+    self.output_schema.as_ref()
+  }
 }
 
 impl Workflow {
