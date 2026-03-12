@@ -2,51 +2,25 @@
 
 ## 2026-03-12
 
-- 读取 `planning-with-files` skill，并接管上一轮未完成的 `mastra-rs` rollout。
-- 审计工作树，确认：
-  - `auth/**` 半成品实现未闭环。
-  - `stores/**`、`voice/**`、`workspaces/**`、多个 `packages/**` 已有大面积未提交改动。
-  - root `task_plan.md`、`findings.md`、`progress.md` 被其它任务内容污染。
-- 并行分工：
-  - Halley 负责 stores cluster。
-  - Wegener 负责 voice/workspaces cluster。
-  - Hilbert 负责 misc packages/test-utils cluster。
-  - 主线程负责 auth、planning files、集成与 commit。
-
-## Auth Milestone
-
-- 修复 `auth/clerk/Cargo.toml` 与 `auth/firebase/Cargo.toml` 的重复 `[dev-dependencies]`。
-- 将八个 auth provider crate 统一到：
-  - `Mastra*Options` builder
-  - provider-local client traits
-  - `packages/auth` 原语复用
-  - integration tests 覆盖 env/config/cookie/bearer/callback/JWKS 行为
-- 运行：
-  - `cargo test -p mastra-auth-auth0 -p mastra-auth-better-auth -p mastra-auth-clerk -p mastra-auth-cloud -p mastra-auth-firebase -p mastra-auth-studio -p mastra-auth-supabase -p mastra-auth-workos`
-- 生成提交：
-  - `67dfacd feat(auth): add provider wrappers for auth crates`
-
-## Cluster Integration
-
-- 回收 agent 结果并核对 stores / packages cluster 的实现方向。
-- 识别到 voice/workspaces 与若干 supporting packages 已在当前树完成真实实现，直接以 root workspace 回归为准，不再重复拆分验证。
-- 代表性实现抽样确认：
-  - `stores/_test-utils/src/provider_support.rs`
-  - `voice/core/src/lib.rs`
-  - `workspaces/core/src/lib.rs`
-  - `packages/_llm-recorder/src/lib.rs`
-  - `explorations/longmemeval/src/lib.rs`
-
-## Final Verification
-
-- 运行：
-  - `cargo fmt --all`
-  - `cargo test --workspace`
-- 结果：
-  - root workspace 编译通过
-  - 所有单元测试、integration tests、doc-tests 通过
-  - observability/auth/stores/voice/workspaces/supporting packages 全部纳入同一回归闭环
-
-## Pending
-
-- 生成最终 integration commit。
+- 接到“要一次性完成 1:1 复刻 Mastra”请求后，先按 AGENTS 要求执行前期调研，而不是继续沿用旧 planning 假设。
+- 读取 `planning-with-files` 与 `brainstorming` skill，确认本任务必须先做真实性审计。
+- 检查 `git status --short --branch`，确认工作树干净，当前 `HEAD` 为 `4a2201f chore(fmt): normalize auth and observability formatting`。
+- 审计根目录，确认当前 Rust 仓虽然镜像了大部分 monorepo crate 类别，但缺少参考仓顶层 `docs/`、`examples/`、`templates/`、`e2e-tests/`、`ee/`、`communications/`、`scripts/`、`patches/` 等产品面。
+- 运行 `cargo fmt --all --check`，结果通过。
+- 运行 `cargo test --workspace`，结果通过；当前 Rust facade 自洽，但这不构成 1:1 复刻完成的证据。
+- 并行启动 3 个审计 agent：
+  - James：目录与 coverage audit。
+  - Maxwell：核心 crate 完成度审计。
+  - Linnaeus：参考仓规模与 facade/skeleton 判断。
+- 主线程补充量化对比：
+  - `packages/core`: Rust `9` files / `1687` LOC vs ref `783` files / `297704` LOC。
+  - `packages/memory`: Rust `5` files / `1075` LOC vs ref `32` files / `29565` LOC。
+  - `packages/server`: Rust `6` files / `1703` LOC vs ref `140` files / `43113` LOC。
+  - `packages/rag`: Rust `1` file / `187` LOC vs ref `64` files / `13501` LOC。
+  - `packages/cli`: Rust `2` files vs ref `72` files。
+  - `packages/mcp`: Rust `5` files vs ref `31` files。
+- 关键结论：
+  - 当前仓通过了完整 workspace 回归，但仍明显是 parity skeleton。
+  - 差距主要集中在 `packages/core`、`packages/server`、`packages/memory`、`packages/cli`、`packages/rag`、`packages/mcp`、`mastracode`。
+- 旧的 `findings.md` 在工作树中处于删除态；本轮重新补建，并把 planning files 全部改写为真实性审计基线。
+- 下一步是生成审计 commit，固定“当前不是 1:1 完成”的事实状态。

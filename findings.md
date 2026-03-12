@@ -1,47 +1,54 @@
 # Findings
 
-## Auth Cluster
+## Reality Check
 
-- `packages/auth` 已经提供了足够的共享原语：`OidcJwtAuthenticator`、`SessionBackedAuthenticator`、`CallbackSessionAuthenticator`，所以 provider crate 最合理的实现方式是“薄 wrapper + provider-local config/trait”，而不是再发明一层 auth core。
-- OIDC 类 provider (`auth0`、`clerk`、`firebase`、`workos` bearer fallback) 统一围绕 `OidcConfiguration` 组装 issuer、audience、JWKS、algorithms 与 leeway。
-- Session 类 provider (`better-auth`、`supabase`) 统一通过 request cookie/bearer 解析后委托 provider-local client trait。
-- Callback 类 provider (`cloud`、`studio`) 统一复用 `CallbackSessionAuthenticator`，只保留 provider 特有的 callback 交换语义。
+- 根工作区 `cargo fmt --all --check` 与 `cargo test --workspace` 全部通过，只能证明当前 Rust facade 自洽，不能证明已经达到 Mastra 1:1 复刻。
+- 当前仓的顶层 crate 类别与参考仓 `.ref/mastra` 高度相似，但这只是 monorepo 拓扑层面的 parity，不是功能层面的 parity。
+- 参考仓根目录还包含 `docs`、`examples`、`templates`、`e2e-tests`、`ee`、`communications`、`scripts`、`patches` 等完整产品资产；当前 Rust 仓没有这些等价面。
 
-## Stores Cluster
+## Quantified Gap
 
-- `stores/_test-utils/src/provider_support.rs` 证明 stores rollout 的真实模式已经从占位 crate 收敛到统一的 provider descriptor/bridge 模型：
-  - `ProviderDescriptor` 描述 provider kind 与 capability。
-  - `ProviderBridge` 绑定 target 与 secrets，并支持 redaction。
-  - `ensure_not_blank` 负责通用配置校验。
-- 各个 stores crate 当前实现是“provider metadata + config validation + capability bridge”，不再是 `add/it_works` 模板。
+- `packages/core`: Rust `9` files / `1687` LOC，参考 `783` files / `297704` LOC。
+- `packages/memory`: Rust `5` files / `1075` LOC，参考 `32` files / `29565` LOC。
+- `packages/server`: Rust `6` files / `1703` LOC，参考 `140` files / `43113` LOC。
+- `packages/rag`: Rust `1` file / `187` LOC，参考 `64` files / `13501` LOC。
+- `packages/mcp`: Rust `5` files，参考 `31` files。
+- `packages/cli`: Rust `2` files，参考 `72` files。
+- `packages/playground`: Rust 只有 manifest 数据结构，参考是完整 Studio UI。
 
-## Voice Cluster
+## Core Gap
 
-- `voice/core/src/lib.rs` 已形成统一的语音 provider 抽象：
-  - `VoiceProviderProfile` 定义 env vars、speech/listening models、speaker catalog、capabilities。
-  - `VoiceProviderAdapter` 负责把 speak/listen request 解析成 provider-specific resolved request。
-  - capability 校验、speaker 校验、transport 解析都已下沉到 core。
-- 各 voice provider crate 现在主要提供 provider profile 与 provider-specific defaults，而不是各自重复造校验逻辑。
+- `packages/core/src/lib.rs` 当前只导出 `Agent`、`Mastra`、`Memory`、`Model`、`Tool`、`Workflow` 等基础对象。
+- 参考 `.ref/mastra/packages/core/src` 拥有 `a2a`、`action`、`auth`、`bundler`、`cache`、`datasets`、`deployer`、`di`、`editor`、`evals`、`events`、`features`、`harness`、`hooks`、`integration`、`loop`、`mcp`、`observability`、`processors`、`relevance`、`server`、`storage`、`stream`、`tts`、`vector`、`voice`、`workspace` 等完整子系统。
+- 当前 Rust `Mastra` 运行时只注册 `agents/tools/workflows/memory` 四类对象；参考 TS `Mastra` 还包含 `storage/vectors/logger/tts/observability/deployer/server/mcpServers/pubsub/scorers/processors/workspace/gateways/events/editor` 等大块能力。
+- 结论：当前 Rust core 是最小 runtime primitive，不是 `@mastra/core` 的同级实现。
 
-## Workspaces Cluster
+## Memory Gap
 
-- `workspaces/core/src/lib.rs` 已形成统一的 workspace provider 抽象：
-  - `WorkspaceProviderKind` 区分 filesystem/blob store/sandbox。
-  - `ConfigField` 与 `ConfigFieldKind` 描述 schema。
-  - `WorkspaceProviderAdapter::validate_config` 负责默认值填充、required field 校验、类型校验与 enum 校验。
-- 各 workspace provider crate 现在主要声明 kinds、config fields 与 defaults，复用 core 的验证流程。
+- `packages/memory/src/lib.rs` 当前主要是 thread/message store facade 与 `MemoryEngine` bridge。
+- 参考 `.ref/mastra/packages/memory/src/index.ts` 包含 working memory、observational memory、semantic recall、vector recall、processors、memory tools 等能力。
+- 结论：当前 Rust memory 只是最小 memory store，不是完整 Mastra memory product layer。
 
-## Supporting Packages
+## Server Gap
 
-- `_llm-recorder` 已提供真实的 request hash / recording / contract validation 能力，不再是占位包。
-- `explorations/longmemeval` 已提供 memory config 枚举与评估汇总逻辑。
-- `_changeset-cli`、`_config`、`_external-types`、`_test-utils`、`_types-builder`、`agent-builder`、`mcp-docs-server`、`mcp-registry-registry`、`schema-compat`、`codemod`、`editor`、`evals`、`fastembed`、`playground`、`playground-ui`、`integrations/opencode`、`server-adapters/_test-utils`、`workflows/_test-utils` 均已替换为最小真实实现，并带单测。
+- `packages/server/src` 当前只覆盖 `health/routes/agents/memory/workflows` 这些最小 HTTP 路由。
+- 参考 `.ref/mastra/packages/server/src/server` 拥有 `handlers`、`server-adapter`、`a2a`、`auth`、`schemas` 等分层，并覆盖 observability、vector、voice、workspace、tools、scores、mcp 等域。
+- 结论：当前 Rust server 只是最小 HTTP facade，不等价于 `@mastra/server`。
 
-## Verification
+## CLI and MastraCode Gap
 
-- auth 定向验证：
-  - `cargo test -p mastra-auth-auth0 -p mastra-auth-better-auth -p mastra-auth-clerk -p mastra-auth-cloud -p mastra-auth-firebase -p mastra-auth-studio -p mastra-auth-supabase -p mastra-auth-workos`
-- 全仓验证：
-  - `cargo fmt --all`
-  - `cargo test --workspace`
-- 结果：root workspace 全量测试与 doc-tests 全部通过。
+- `packages/cli/src/main.rs` 当前只有 `serve` 与 `routes` 两个子命令。
+- 参考 `.ref/mastra/packages/cli/src/index.ts` 具备 `create`、`init`、`lint`、`dev`、`build`、`start`、`studio`、`migrate`、`scorers` 以及 analytics/template/skills/MCP 等完整 tooling 面。
+- `mastracode/src/lib.rs` 当前仍是 headless echo runner；参考 `.ref/mastra/mastracode/src` 拥有 TUI、auth、hooks、IPC、LSP、MCP manager、workspace、modes、subagents、permissions、settings/onboarding 等完整体系。
+- 结论：CLI 与 MastraCode 都远未达到产品级 parity。
+
+## RAG / MCP / Playground Gap
+
+- `packages/rag/src/lib.rs` 当前只提供 `MDocument` 与 chunking；参考版还包括 `document`、`rerank`、`GraphRAG`、`tools`、`utils/default-settings`。
+- `packages/mcp/src` 当前只有极小本地 client/server facade；参考版拆成 `client`、`server`、`shared`、fixtures 与多 transport/protocol 能力。
+- `packages/playground/src/lib.rs` 当前只是 manifest/route 数据结构；参考版 `packages/playground/src/App.tsx` 是完整 Studio UI。
+
+## Current Status
+
+- 当前仓可以称为 `broad monorepo parity scaffold with partial runtime primitives`。
+- 当前仓不能被诚实地描述为 “Mastra 1:1 完成”。
