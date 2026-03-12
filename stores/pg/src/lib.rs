@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use mastra_memory::{
-    AppendMessageRequest, CreateThreadRequest, HistoryQuery, InMemoryMemoryStore,
-    ListMessagesQuery, ListThreadsQuery, MemoryStore, MemoryStoreResult, Message, MessagePage,
-    Thread, ThreadPage,
+    AppendMessageRequest, CloneThreadRequest, CreateThreadRequest, DeleteMessagesRequest,
+    HistoryQuery, InMemoryMemoryStore, ListMessagesQuery, ListThreadsQuery, MemoryStore,
+    MemoryStoreResult, Message, MessagePage, Thread, ThreadPage,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -70,11 +70,23 @@ impl MemoryStore for PgStore {
     async fn history(&self, query: HistoryQuery) -> MemoryStoreResult<Vec<Message>> {
         self.inner.history(query).await
     }
+
+    async fn clone_thread(&self, input: CloneThreadRequest) -> MemoryStoreResult<Thread> {
+        self.inner.clone_thread(input).await
+    }
+
+    async fn delete_messages(&self, input: DeleteMessagesRequest) -> MemoryStoreResult<usize> {
+        self.inner.delete_messages(input).await
+    }
+
+    async fn delete_thread(&self, thread_id: Uuid) -> MemoryStoreResult<()> {
+        self.inner.delete_thread(thread_id).await
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use mastra_memory::{HistoryQuery, MessageRole};
+    use mastra_memory::{CloneThreadRequest, HistoryQuery, MessageRole};
 
     use super::{CreateThreadRequest, MemoryStore, PgStore, PgStoreConfig};
 
@@ -98,9 +110,13 @@ mod tests {
             .await
             .expect("message should be written");
 
+        let cloned = store
+            .clone_thread(CloneThreadRequest::new(thread.id).with_title("copy"))
+            .await
+            .expect("thread should be cloned");
         let history = store
             .history(HistoryQuery {
-                thread_id: thread.id,
+                thread_id: cloned.id,
                 limit: None,
             })
             .await

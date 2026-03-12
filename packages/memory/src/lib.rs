@@ -17,7 +17,7 @@ pub use model::{
     HistoryQuery, ListMessagesQuery, ListThreadsQuery, Message, MessagePage, MessageRole,
     Pagination, Thread, ThreadPage,
 };
-pub use store::{MemoryStore, MemoryStoreError, MemoryStoreResult};
+pub use store::{MemoryStore, MemoryStoreError, MemoryStoreResult, ensure_valid_pagination};
 
 #[derive(Clone)]
 pub struct Memory {
@@ -178,6 +178,7 @@ fn map_store_error(error: MemoryStoreError) -> MastraError {
             MastraError::not_found(format!("thread '{thread_id}' was not found"))
         }
         MemoryStoreError::InvalidPagination => MastraError::validation("invalid pagination"),
+        MemoryStoreError::Backend(message) => MastraError::storage(message),
     }
 }
 

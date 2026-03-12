@@ -1,20 +1,29 @@
+use std::{net::SocketAddr, sync::Arc};
+
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::{get, post},
-    Json, Router,
+};
+use chrono::Utc;
+use mastra_core::{
+    Agent, CreateThreadRequest, MemoryEngine, MemoryMessage, MemoryRecallRequest, Workflow,
 };
 use tracing::instrument;
 use uuid::Uuid;
 
 use crate::{
     contracts::{
-        CreateWorkflowRunRequest, GenerateRequest, ListAgentsResponse,
-        ListWorkflowsResponse, RouteDescription, StartWorkflowRunRequest,
-        StartWorkflowRunResponse, WorkflowRunRecord,
+        AppendMemoryMessagesRequest, AppendMemoryMessagesResponse, CreateMemoryThreadRequest,
+        CreateMemoryThreadResponse, CreateWorkflowRunRequest, GenerateRequest,
+        ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse,
+        ListThreadsResponse, ListWorkflowsResponse, RouteDescription,
+        StartWorkflowRunRequest, StartWorkflowRunResponse, WorkflowRunRecord,
     },
     error::{ServerError, ServerResult},
     registry::RuntimeRegistry,
+    runtime::{CoreAgentRuntime, CoreWorkflowRuntime},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +71,19 @@ impl MastraServer {
         })
     }
 
+    pub fn register_agent(&self, agent: Agent) {
+        self.registry.register_agent(CoreAgentRuntime::new(agent));
+    }
+
+    pub fn register_workflow(&self, workflow: Workflow) {
+        self.registry
+            .register_workflow(CoreWorkflowRuntime::new(workflow));
+    }
+
+    pub fn register_memory(&self, memory_id: impl Into<String>, memory: Arc<dyn MemoryEngine>) {
+        self.registry.register_memory(memory_id, memory);
+    }
+
     pub fn registry(&self) -> &RuntimeRegistry {
         &self.registry
     }
@@ -70,9 +92,24 @@ impl MastraServer {
         let api_router = Router::new()
             .route("/agents", get(list_agents))
             .route("/agents/{agent_id}/generate", post(generate_agent))
+            .route("/memories", get(list_memories))
+            .route(
+                "/memory/{memory_id}/threads",
+                get(list_memory_threads).post(create_memory_thread),
+            )
+            .route(
+                "/memory/{memory_id}/threads/{thread_id}/messages",
+                post(append_memory_messages).get(list_memory_messages),
+            )
             .route("/workflows", get(list_workflows))
-            .route("/workflows/{workflow_id}/create-run", post(create_workflow_run))
-            .route("/workflows/{workflow_id}/start-async", post(start_workflow_async))
+            .route(
+                "/workflows/{workflow_id}/create-run",
+                post(create_workflow_run),
+            )
+            .route(
+                "/workflows/{workflow_id}/start-async",
+                post(start_workflow_async),
+            )
             .route(
                 "/workflows/{workflow_id}/runs/{run_id}",
                 get(get_workflow_run),
@@ -92,13 +129,47 @@ impl MastraServer {
     pub fn route_catalog(&self) -> Vec<RouteDescription> {
         route_catalog(&self.config.api_prefix)
     }
+
+    pub async fn serve(self, address: SocketAddr) -> std::io::Result<()> {
+        let listener = tokio::net::TcpListener::bind(address).await?;
+        axum::serve(listener, self.into_router()).await
+    }
 }
 
 pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
     let prefix = normalize_prefix(prefix);
     [
         ("GET", "/agents", "List registered agents"),
-        ("POST", "/agents/{agent_id}/generate", "Generate an agent response"),
+        (
+            "POST",
+            "/agents/{agent_id}/generate",
+            "Generate an agent response",
+        ),
+        (
+            "GET",
+            "/memories",
+            "List registered memories",
+        ),
+        (
+            "GET",
+            "/memory/{memory_id}/threads",
+            "List memory threads",
+        ),
+        (
+            "POST",
+            "/memory/{memory_id}/threads",
+            "Create a memory thread",
+        ),
+        (
+            "GET",
+            "/memory/{memory_id}/threads/{thread_id}/messages",
+            "List messages for a memory thread",
+        ),
+        (
+            "POST",
+            "/memory/{memory_id}/threads/{thread_id}/messages",
+            "Append messages to a memory thread",
+        ),
         ("GET", "/workflows", "List registered workflows"),
         (
             "POST",
@@ -135,9 +206,7 @@ fn normalize_prefix(prefix: &str) -> String {
 }
 
 #[instrument(skip(state))]
-async fn list_agents(
-    State(state): State<AppState>,
-) -> Json<ListAgentsResponse> {
+async fn list_agents(State(state): State<AppState>) -> Json<ListAgentsResponse> {
     Json(ListAgentsResponse {
         agents: state.registry.list_agents(),
     })
@@ -155,12 +224,79 @@ async fn generate_agent(
 }
 
 #[instrument(skip(state))]
-async fn list_workflows(
-    State(state): State<AppState>,
-) -> Json<ListWorkflowsResponse> {
+async fn list_workflows(State(state): State<AppState>) -> Json<ListWorkflowsResponse> {
     Json(ListWorkflowsResponse {
         workflows: state.registry.list_workflows(),
     })
+}
+
+#[instrument(skip(state, request))]
+async fn create_memory_thread(
+    State(state): State<AppState>,
+    Path(memory_id): Path<String>,
+    Json(request): Json<CreateMemoryThreadRequest>,
+) -> ServerResult<Json<CreateMemoryThreadResponse>> {
+    let memory = state.registry.find_memory(&memory_id)?;
+    let thread = memory
+        .create_thread(CreateThreadRequest {
+            id: request.id,
+            resource_id: request.resource_id,
+            title: request.title,
+            metadata: request.metadata,
+        })
+        .await
+        .map_err(ServerError::internal)?;
+
+    Ok(Json(CreateMemoryThreadResponse { thread }))
+}
+
+#[instrument(skip(state, request))]
+async fn append_memory_messages(
+    State(state): State<AppState>,
+    Path((memory_id, thread_id)): Path<(String, String)>,
+    Json(request): Json<AppendMemoryMessagesRequest>,
+) -> ServerResult<Json<AppendMemoryMessagesResponse>> {
+    let memory = state.registry.find_memory(&memory_id)?;
+    let messages = request
+        .messages
+        .into_iter()
+        .map(|message| MemoryMessage {
+            id: Uuid::now_v7().to_string(),
+            thread_id: thread_id.clone(),
+            role: message.role.into(),
+            content: message.content,
+            created_at: Utc::now(),
+            metadata: message.metadata,
+        })
+        .collect::<Vec<_>>();
+    let appended = messages.len();
+
+    memory
+        .append_messages(&thread_id, messages)
+        .await
+        .map_err(ServerError::internal)?;
+
+    Ok(Json(AppendMemoryMessagesResponse {
+        thread_id,
+        appended,
+    }))
+}
+
+#[instrument(skip(state))]
+async fn list_memory_messages(
+    State(state): State<AppState>,
+    Path((memory_id, thread_id)): Path<(String, String)>,
+) -> ServerResult<Json<ListMemoryMessagesResponse>> {
+    let memory = state.registry.find_memory(&memory_id)?;
+    let messages = memory
+        .list_messages(MemoryRecallRequest {
+            thread_id,
+            limit: None,
+        })
+        .await
+        .map_err(ServerError::internal)?;
+
+    Ok(Json(ListMemoryMessagesResponse { messages }))
 }
 
 #[instrument(skip(state, request))]
@@ -184,9 +320,7 @@ async fn start_workflow_async(
     // We persist a "running" record before executing the workflow so the API
     // always exposes a run identifier, even if the workflow fails partway
     // through execution.
-    let run = state
-        .registry
-        .begin_workflow_run(&workflow_id, &request)?;
+    let run = state.registry.begin_workflow_run(&workflow_id, &request)?;
     let run_id = run.run_id;
 
     match workflow.start(request).await {
@@ -213,8 +347,8 @@ async fn get_workflow_run(
     State(state): State<AppState>,
     Path((workflow_id, run_id)): Path<(String, String)>,
 ) -> ServerResult<Json<WorkflowRunRecord>> {
-    let parsed_run_id = Uuid::parse_str(&run_id)
-        .map_err(|error| ServerError::BadRequest(error.to_string()))?;
+    let parsed_run_id =
+        Uuid::parse_str(&run_id).map_err(|error| ServerError::BadRequest(error.to_string()))?;
     let run = state
         .registry
         .get_workflow_run(&workflow_id, parsed_run_id)?;
@@ -225,10 +359,10 @@ async fn get_workflow_run(
 mod tests {
     use async_trait::async_trait;
     use axum::{
-        body::{to_bytes, Body},
+        body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use tower::ServiceExt;
 
     use crate::{

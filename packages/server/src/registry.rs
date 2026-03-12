@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use indexmap::IndexMap;
+use mastra_core::MemoryEngine;
 use parking_lot::RwLock;
 use uuid::Uuid;
 
 use crate::{
     contracts::{
-        AgentSummary, CreateWorkflowRunRequest, StartWorkflowRunRequest, WorkflowRunRecord,
-        WorkflowRunStatus, WorkflowSummary,
+        AgentSummary, CreateWorkflowRunRequest, MemorySummary, StartWorkflowRunRequest,
+        WorkflowRunRecord, WorkflowRunStatus, WorkflowSummary,
     },
     error::{ServerError, ServerResult},
     runtime::{AgentRuntime, WorkflowRuntime},
@@ -16,6 +17,7 @@ use crate::{
 #[derive(Clone, Default)]
 pub struct RuntimeRegistry {
     agents: Arc<RwLock<IndexMap<String, Arc<dyn AgentRuntime>>>>,
+    memory: Arc<RwLock<IndexMap<String, Arc<dyn MemoryEngine>>>>,
     workflows: Arc<RwLock<IndexMap<String, Arc<dyn WorkflowRuntime>>>>,
     workflow_runs: Arc<RwLock<IndexMap<Uuid, WorkflowRunRecord>>>,
 }
@@ -45,6 +47,10 @@ impl RuntimeRegistry {
             .insert(summary.id.clone(), Arc::new(workflow));
     }
 
+    pub fn register_memory(&self, memory_id: impl Into<String>, memory: Arc<dyn MemoryEngine>) {
+        self.memory.write().insert(memory_id.into(), memory);
+    }
+
     pub fn list_agents(&self) -> Vec<AgentSummary> {
         self.agents
             .read()
@@ -58,6 +64,15 @@ impl RuntimeRegistry {
             .read()
             .values()
             .map(|workflow| workflow.summary())
+            .collect()
+    }
+
+    pub fn list_memory(&self) -> Vec<MemorySummary> {
+        self.memory
+            .read()
+            .keys()
+            .cloned()
+            .map(|id| MemorySummary { id })
             .collect()
     }
 
@@ -80,6 +95,17 @@ impl RuntimeRegistry {
             .ok_or_else(|| ServerError::NotFound {
                 resource: "workflow",
                 id: workflow_id.to_owned(),
+            })
+    }
+
+    pub fn find_memory(&self, memory_id: &str) -> ServerResult<Arc<dyn MemoryEngine>> {
+        self.memory
+            .read()
+            .get(memory_id)
+            .cloned()
+            .ok_or_else(|| ServerError::NotFound {
+                resource: "memory",
+                id: memory_id.to_owned(),
             })
     }
 
@@ -131,12 +157,10 @@ impl RuntimeRegistry {
         result: serde_json::Value,
     ) -> ServerResult<WorkflowRunRecord> {
         let mut runs = self.workflow_runs.write();
-        let record = runs
-            .get_mut(&run_id)
-            .ok_or_else(|| ServerError::NotFound {
-                resource: "workflow run",
-                id: run_id.to_string(),
-            })?;
+        let record = runs.get_mut(&run_id).ok_or_else(|| ServerError::NotFound {
+            resource: "workflow run",
+            id: run_id.to_string(),
+        })?;
 
         record.status = WorkflowRunStatus::Success;
         record.result = Some(result);
@@ -153,12 +177,10 @@ impl RuntimeRegistry {
         E: std::fmt::Display,
     {
         let mut runs = self.workflow_runs.write();
-        let record = runs
-            .get_mut(&run_id)
-            .ok_or_else(|| ServerError::NotFound {
-                resource: "workflow run",
-                id: run_id.to_string(),
-            })?;
+        let record = runs.get_mut(&run_id).ok_or_else(|| ServerError::NotFound {
+            resource: "workflow run",
+            id: run_id.to_string(),
+        })?;
 
         record.status = WorkflowRunStatus::Failed;
         record.error = Some(error.to_string());

@@ -4,8 +4,7 @@ use serde_json::Value;
 
 use crate::{
     contracts::{
-        AgentSummary, GenerateRequest, GenerateResponse, StartWorkflowRunRequest,
-        WorkflowSummary,
+        AgentSummary, GenerateRequest, GenerateResponse, StartWorkflowRunRequest, WorkflowSummary,
     },
     error::{ServerError, ServerResult},
 };
@@ -92,7 +91,10 @@ impl WorkflowRuntime for CoreWorkflowRuntime {
         let input = request.input_data.unwrap_or(Value::Null);
         let result = self
             .workflow
-            .run(input, RequestContext::from_value_map(request.request_context))
+            .run(
+                input,
+                RequestContext::from_value_map(request.request_context),
+            )
             .await
             .map_err(ServerError::internal)?;
         Ok(result.output)

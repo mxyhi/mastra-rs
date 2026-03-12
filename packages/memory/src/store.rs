@@ -41,7 +41,7 @@ pub trait MemoryStore: Send + Sync {
     async fn delete_thread(&self, thread_id: Uuid) -> MemoryStoreResult<()>;
 }
 
-pub(crate) fn ensure_valid_pagination(pagination: Pagination) -> MemoryStoreResult<()> {
+pub fn ensure_valid_pagination(pagination: Pagination) -> MemoryStoreResult<()> {
     if pagination.per_page == 0 {
         return Err(MemoryStoreError::InvalidPagination);
     }

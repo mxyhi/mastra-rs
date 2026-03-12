@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use mastra_cli::{default_bind_addr, render_routes, serve_banner};
 use mastra_loggers::init_tracing;
 use mastra_server::MastraHttpServer;
 
@@ -13,7 +14,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Serve {
-        #[arg(long, default_value = "127.0.0.1:3000")]
+        #[arg(long, default_value_t = default_bind_addr())]
         addr: std::net::SocketAddr,
     },
     Routes,
@@ -26,12 +27,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Command::Serve { addr } => {
+            eprintln!("{}", serve_banner(addr));
             MastraHttpServer::new().serve(addr).await?;
         }
         Command::Routes => {
-            for route in MastraHttpServer::route_descriptions() {
-                println!("{} {}", route.method, route.path);
-            }
+            println!("{}", render_routes(&MastraHttpServer::route_descriptions()));
         }
     }
 
