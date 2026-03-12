@@ -59,7 +59,11 @@ impl StudioCallbackClient for StubCallbackClient {
 
 #[tokio::test]
 async fn studio_auth_prefers_wos_session_cookie() {
-    let provider = MastraAuthStudio::new(MastraAuthStudioOptions::default(), StubVerifier, StubCallbackClient);
+    let provider = MastraAuthStudio::new(
+        MastraAuthStudioOptions::default(),
+        StubVerifier,
+        StubCallbackClient,
+    );
 
     let request = AuthRequestParts::default()
         .with_cookie_header("wos-session=sealed-session")
@@ -77,7 +81,11 @@ async fn studio_auth_prefers_wos_session_cookie() {
 
 #[tokio::test]
 async fn studio_auth_handles_callback_without_requiring_state_specific_logic() {
-    let provider = MastraAuthStudio::new(MastraAuthStudioOptions::default(), StubVerifier, StubCallbackClient);
+    let provider = MastraAuthStudio::new(
+        MastraAuthStudioOptions::default(),
+        StubVerifier,
+        StubCallbackClient,
+    );
 
     let result = provider
         .handle_callback(&AuthRequestParts::default().with_callback("sealed-session", "ignored"))

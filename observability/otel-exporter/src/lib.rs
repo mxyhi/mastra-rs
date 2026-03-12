@@ -5,7 +5,7 @@ use mastra_observability_mastra::{
     Attributes, ExportError, HttpExporter, HttpMethod, HttpRequest, HttpRequestBuilder,
     ObservabilityExporter, SpanEvent, SpanKind, SpanStatus, TraceBatch, TraceSpan,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use url::Url;
 
 #[derive(Clone, Debug, Default)]
@@ -132,8 +132,14 @@ fn otel_span(span: &TraceSpan) -> Value {
         attributes.push(key_value("mastra.output", output.clone()));
     }
     if let Some(usage) = &span.usage {
-        attributes.push(key_value("gen_ai.usage.input_tokens", json!(usage.input_tokens)));
-        attributes.push(key_value("gen_ai.usage.output_tokens", json!(usage.output_tokens)));
+        attributes.push(key_value(
+            "gen_ai.usage.input_tokens",
+            json!(usage.input_tokens),
+        ));
+        attributes.push(key_value(
+            "gen_ai.usage.output_tokens",
+            json!(usage.output_tokens),
+        ));
         attributes.push(key_value(
             "gen_ai.usage.reasoning_tokens",
             json!(usage.reasoning_tokens),
@@ -234,8 +240,5 @@ fn status_code(status: &SpanStatus) -> &'static str {
 }
 
 fn timestamp_nanos(value: chrono::DateTime<chrono::Utc>) -> String {
-    value
-        .timestamp_nanos_opt()
-        .unwrap_or_default()
-        .to_string()
+    value.timestamp_nanos_opt().unwrap_or_default().to_string()
 }

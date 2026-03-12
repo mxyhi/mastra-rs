@@ -74,8 +74,11 @@ impl TraceSpan {
     }
 
     pub fn duration_ms(&self) -> Option<i64> {
-        self.ended_at
-            .map(|ended_at| ended_at.signed_duration_since(self.started_at).num_milliseconds())
+        self.ended_at.map(|ended_at| {
+            ended_at
+                .signed_duration_since(self.started_at)
+                .num_milliseconds()
+        })
     }
 }
 
@@ -105,7 +108,11 @@ impl TraceBatch {
         spans.sort_by(|left, right| {
             left.started_at
                 .cmp(&right.started_at)
-                .then_with(|| left.parent_span_id.is_some().cmp(&right.parent_span_id.is_some()))
+                .then_with(|| {
+                    left.parent_span_id
+                        .is_some()
+                        .cmp(&right.parent_span_id.is_some())
+                })
                 .then_with(|| left.span_id.cmp(&right.span_id))
         });
         spans

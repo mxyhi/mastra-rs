@@ -3,12 +3,12 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
-    body::{to_bytes, Body},
+    Router,
+    body::{Body, to_bytes},
     extract::State,
     http::{Request, StatusCode},
     response::IntoResponse,
     routing::any,
-    Router,
 };
 use chrono::{Duration, TimeZone, Utc};
 use mastra_observability_mastra::{
@@ -17,7 +17,7 @@ use mastra_observability_mastra::{
 use serde_json::json;
 use tokio::{
     net::TcpListener,
-    sync::{mpsc, Mutex},
+    sync::{Mutex, mpsc},
     task::JoinHandle,
 };
 use url::Url;

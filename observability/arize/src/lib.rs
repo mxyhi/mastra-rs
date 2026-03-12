@@ -27,10 +27,7 @@ impl ArizeExporter {
 
         let mut resource_attributes: std::collections::BTreeMap<String, serde_json::Value> =
             Default::default();
-        resource_attributes.insert(
-            "openinference.exporter".to_string(),
-            json!("arize"),
-        );
+        resource_attributes.insert("openinference.exporter".to_string(), json!("arize"));
         if let Some(project_name) = &config.project_name {
             resource_attributes.insert(
                 "openinference.project.name".to_string(),

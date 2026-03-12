@@ -42,10 +42,16 @@ pub fn example_trace_batch(service_name: &str) -> TraceBatch {
 
 pub fn provider_example_endpoints() -> BTreeMap<&'static str, &'static str> {
     BTreeMap::from([
-        ("langfuse", "https://cloud.langfuse.com/api/public/ingestion"),
+        (
+            "langfuse",
+            "https://cloud.langfuse.com/api/public/ingestion",
+        ),
         ("langsmith", "https://api.smith.langchain.com/runs/batch"),
         ("posthog", "https://us.i.posthog.com/batch/"),
-        ("datadog", "https://api.datadoghq.com/api/intake/llm-obs/v1/trace/spans"),
+        (
+            "datadog",
+            "https://api.datadoghq.com/api/intake/llm-obs/v1/trace/spans",
+        ),
         ("sentry", "https://<host>/api/<project_id>/envelope/"),
     ])
 }

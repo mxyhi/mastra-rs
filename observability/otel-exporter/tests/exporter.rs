@@ -24,7 +24,10 @@ fn builds_otlp_json_request() {
     );
     let body: serde_json::Value =
         serde_json::from_slice(&requests[0].body).expect("body should be valid json");
-    assert_eq!(body["resourceSpans"][0]["resource"]["attributes"][0]["key"], "service.name");
+    assert_eq!(
+        body["resourceSpans"][0]["resource"]["attributes"][0]["key"],
+        "service.name"
+    );
     assert_eq!(
         body["resourceSpans"][0]["scopeSpans"][0]["spans"]
             .as_array()

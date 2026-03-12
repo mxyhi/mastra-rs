@@ -9,7 +9,9 @@ pub struct OtelBridge {
 
 impl OtelBridge {
     pub fn new(resource_attributes: Attributes) -> Self {
-        Self { resource_attributes }
+        Self {
+            resource_attributes,
+        }
     }
 
     pub fn to_payload(&self, batch: &TraceBatch) -> Value {

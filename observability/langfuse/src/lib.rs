@@ -60,10 +60,8 @@ impl HttpRequestBuilder for LangfuseRequestBuilder {
         validate_config(&self.config)?;
 
         let url = endpoint_url(&self.config.base_url, "/api/public/ingestion")?;
-        let mut headers = BTreeMap::from([(
-            "content-type".to_string(),
-            "application/json".to_string(),
-        )]);
+        let mut headers =
+            BTreeMap::from([("content-type".to_string(), "application/json".to_string())]);
         headers.insert(
             "authorization".to_string(),
             format!(

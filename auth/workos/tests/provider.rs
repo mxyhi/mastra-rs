@@ -3,7 +3,9 @@ use chrono::Utc;
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use mastra_auth_workos::{MastraAuthWorkos, MastraAuthWorkosOptions, WorkosSessionClient};
-use mastra_packages_auth::{AuthError, AuthIdentity, AuthRequestParts, Authenticator, Claims, JwksSource};
+use mastra_packages_auth::{
+    AuthError, AuthIdentity, AuthRequestParts, Authenticator, Claims, JwksSource,
+};
 use serde_json::json;
 
 fn signing_secret() -> &'static [u8] {
@@ -11,9 +13,11 @@ fn signing_secret() -> &'static [u8] {
 }
 
 fn inline_hs256_jwks() -> JwkSet {
-    let mut jwk =
-        jsonwebtoken::jwk::Jwk::from_encoding_key(&EncodingKey::from_secret(signing_secret()), Algorithm::HS256)
-            .expect("jwk");
+    let mut jwk = jsonwebtoken::jwk::Jwk::from_encoding_key(
+        &EncodingKey::from_secret(signing_secret()),
+        Algorithm::HS256,
+    )
+    .expect("jwk");
     jwk.common.key_id = Some("workos-key".to_string());
     JwkSet { keys: vec![jwk] }
 }
@@ -23,7 +27,10 @@ struct StubSessionClient;
 
 #[async_trait]
 impl WorkosSessionClient for StubSessionClient {
-    async fn resolve_session(&self, session_token: &str) -> Result<Option<AuthIdentity>, AuthError> {
+    async fn resolve_session(
+        &self,
+        session_token: &str,
+    ) -> Result<Option<AuthIdentity>, AuthError> {
         Ok(Some(AuthIdentity {
             provider: "ignored".to_string(),
             subject: format!("workos-session:{session_token}"),

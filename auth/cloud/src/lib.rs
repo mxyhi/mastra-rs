@@ -97,7 +97,9 @@ where
         &self,
         request: &AuthRequestParts,
     ) -> Result<Option<CallbackResult>, AuthError> {
-        let code = request.callback_code().ok_or(AuthError::MissingCallbackCode)?;
+        let code = request
+            .callback_code()
+            .ok_or(AuthError::MissingCallbackCode)?;
         let state = request
             .callback_state()
             .ok_or(AuthError::MissingCallbackState)?;

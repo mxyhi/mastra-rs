@@ -99,9 +99,9 @@ fn validate_config(config: &SentryConfig) -> Result<(), ExportError> {
 
 fn envelope_url(dsn: &str) -> Result<Url, ExportError> {
     let dsn = Url::parse(dsn)?;
-    let host = dsn
-        .host_str()
-        .ok_or_else(|| ExportError::InvalidConfiguration("sentry dsn host is missing".to_string()))?;
+    let host = dsn.host_str().ok_or_else(|| {
+        ExportError::InvalidConfiguration("sentry dsn host is missing".to_string())
+    })?;
     let project_id = dsn
         .path_segments()
         .and_then(|segments| segments.filter(|segment| !segment.is_empty()).next_back())
@@ -109,7 +109,10 @@ fn envelope_url(dsn: &str) -> Result<Url, ExportError> {
             ExportError::InvalidConfiguration("sentry dsn project id is missing".to_string())
         })?;
 
-    let port = dsn.port().map(|port| format!(":{port}")).unwrap_or_default();
+    let port = dsn
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
     Url::parse(&format!(
         "{}://{}{}/api/{}/envelope/",
         dsn.scheme(),

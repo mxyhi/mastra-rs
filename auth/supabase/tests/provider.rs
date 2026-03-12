@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use mastra_auth_supabase::{
-    MastraAuthSupabase, MastraAuthSupabaseOptions, SupabaseAuthClient,
-};
+use mastra_auth_supabase::{MastraAuthSupabase, MastraAuthSupabaseOptions, SupabaseAuthClient};
 use mastra_packages_auth::{AuthError, AuthIdentity, AuthRequestParts, Authenticator, Claims};
 
 #[derive(Default)]
@@ -26,7 +24,8 @@ impl SupabaseAuthClient for StubSupabaseClient {
 
 #[tokio::test]
 async fn supabase_uses_bearer_token_by_default() {
-    let provider = MastraAuthSupabase::new(MastraAuthSupabaseOptions::default(), StubSupabaseClient);
+    let provider =
+        MastraAuthSupabase::new(MastraAuthSupabaseOptions::default(), StubSupabaseClient);
 
     let identity = provider
         .authenticate(&AuthRequestParts::default().with_authorization("Bearer access-token"))
@@ -46,7 +45,9 @@ async fn supabase_can_read_access_token_from_cookie_when_configured() {
     );
 
     let identity = provider
-        .authenticate(&AuthRequestParts::default().with_cookie_header("sb-access-token=cookie-token"))
+        .authenticate(
+            &AuthRequestParts::default().with_cookie_header("sb-access-token=cookie-token"),
+        )
         .await
         .expect("auth ok")
         .expect("identity");

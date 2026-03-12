@@ -10,9 +10,11 @@ fn signing_secret() -> &'static [u8] {
 }
 
 fn inline_hs256_jwks() -> JwkSet {
-    let mut jwk =
-        jsonwebtoken::jwk::Jwk::from_encoding_key(&EncodingKey::from_secret(signing_secret()), Algorithm::HS256)
-            .expect("jwk");
+    let mut jwk = jsonwebtoken::jwk::Jwk::from_encoding_key(
+        &EncodingKey::from_secret(signing_secret()),
+        Algorithm::HS256,
+    )
+    .expect("jwk");
     jwk.common.key_id = Some("clerk-key".to_string());
     JwkSet { keys: vec![jwk] }
 }

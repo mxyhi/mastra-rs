@@ -3,7 +3,7 @@ use mastra_observability_mastra::{
     ExportError, HttpExporter, HttpMethod, HttpRequest, HttpRequestBuilder, ObservabilityExporter,
     SpanEvent, SpanKind, TraceBatch, TraceSpan,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use url::Url;
 
 #[derive(Clone, Debug)]
@@ -42,17 +42,13 @@ impl HttpRequestBuilder for BraintrustRequestBuilder {
             .into_iter()
             .map(|span| braintrust_event(batch, span))
             .collect::<Vec<_>>();
-        events.extend(
-            batch.ordered_spans()
-                .into_iter()
-                .flat_map(|span| {
-                    span.events
-                        .iter()
-                        .enumerate()
-                        .map(|(index, event)| braintrust_span_event(batch, span, event, index))
-                        .collect::<Vec<_>>()
-                }),
-        );
+        events.extend(batch.ordered_spans().into_iter().flat_map(|span| {
+            span.events
+                .iter()
+                .enumerate()
+                .map(|(index, event)| braintrust_span_event(batch, span, event, index))
+                .collect::<Vec<_>>()
+        }));
 
         Ok(vec![HttpRequest {
             method: HttpMethod::Post,

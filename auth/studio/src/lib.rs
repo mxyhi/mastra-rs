@@ -113,7 +113,9 @@ where
         &self,
         request: &AuthRequestParts,
     ) -> Result<Option<CallbackResult>, AuthError> {
-        let code = request.callback_code().ok_or(AuthError::MissingCallbackCode)?;
+        let code = request
+            .callback_code()
+            .ok_or(AuthError::MissingCallbackCode)?;
         self.client
             .exchange_callback(code, request.callback_state())
             .await

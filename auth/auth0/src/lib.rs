@@ -107,7 +107,10 @@ impl MastraAuthAuth0 {
     }
 
     pub fn jwks_uri(&self) -> String {
-        format!("https://{}/{AUTH0_JWKS_SUFFIX}", self.domain.trim_end_matches('/'))
+        format!(
+            "https://{}/{AUTH0_JWKS_SUFFIX}",
+            self.domain.trim_end_matches('/')
+        )
     }
 }
 

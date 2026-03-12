@@ -59,10 +59,8 @@ impl HttpRequestBuilder for PostHogRequestBuilder {
         validate_config(&self.config)?;
 
         let url = endpoint_url(&self.config.host, "/batch/")?;
-        let headers = BTreeMap::from([(
-            "content-type".to_string(),
-            "application/json".to_string(),
-        )]);
+        let headers =
+            BTreeMap::from([("content-type".to_string(), "application/json".to_string())]);
         let distinct_id = batch
             .metadata_string("user_id")
             .unwrap_or(self.config.default_distinct_id.as_str());

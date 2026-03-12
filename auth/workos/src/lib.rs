@@ -9,10 +9,8 @@ use mastra_packages_auth::{
 
 #[async_trait]
 pub trait WorkosSessionClient: Send + Sync {
-    async fn resolve_session(
-        &self,
-        session_token: &str,
-    ) -> Result<Option<AuthIdentity>, AuthError>;
+    async fn resolve_session(&self, session_token: &str)
+    -> Result<Option<AuthIdentity>, AuthError>;
 }
 
 #[derive(Clone, Debug)]
