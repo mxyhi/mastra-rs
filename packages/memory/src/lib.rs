@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mastra_core::{
-    CreateThreadRequest as CoreCreateThreadRequest, MastraError, MemoryEngine, MemoryMessage,
-    MemoryRecallRequest, MemoryRole, Thread as CoreThread,
+    CloneThreadRequest as CoreCloneThreadRequest, CreateThreadRequest as CoreCreateThreadRequest,
+    MastraError, MemoryEngine, MemoryMessage, MemoryRecallRequest, MemoryRole,
+    Thread as CoreThread,
 };
 use uuid::Uuid;
 
@@ -163,6 +164,40 @@ impl MemoryEngine for Memory {
             })
             .await
             .map(|messages| messages.into_iter().map(message_to_core).collect())
+            .map_err(map_store_error)
+    }
+
+    async fn clone_thread(
+        &self,
+        request: CoreCloneThreadRequest,
+    ) -> mastra_core::Result<CoreThread> {
+        let source_thread_id = parse_uuid(&request.source_thread_id, "source thread id")?;
+        let new_thread_id = request
+            .new_thread_id
+            .as_deref()
+            .map(|value| parse_uuid(value, "new thread id"))
+            .transpose()?;
+
+        let thread = self
+            .store
+            .clone_thread(CloneThreadRequest {
+                source_thread_id,
+                new_thread_id,
+                resource_id: request.resource_id,
+                title: request.title,
+                metadata: request.metadata,
+            })
+            .await
+            .map_err(map_store_error)?;
+
+        Ok(thread_to_core(thread))
+    }
+
+    async fn delete_thread(&self, thread_id: &str) -> mastra_core::Result<()> {
+        let thread_id = parse_uuid(thread_id, "thread id")?;
+        self.store
+            .delete_thread(thread_id)
+            .await
             .map_err(map_store_error)
     }
 }

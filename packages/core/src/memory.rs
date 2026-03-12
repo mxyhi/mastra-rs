@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::error::Result;
+use crate::error::{MastraError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub enum MemoryRole {
@@ -48,6 +48,15 @@ pub struct MemoryRecallRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CloneThreadRequest {
+    pub source_thread_id: String,
+    pub new_thread_id: Option<String>,
+    pub resource_id: Option<String>,
+    pub title: Option<String>,
+    pub metadata: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MemoryConfig {
     pub last_messages: Option<usize>,
     pub read_only: bool,
@@ -73,4 +82,16 @@ pub trait MemoryEngine: Send + Sync {
     async fn append_messages(&self, thread_id: &str, messages: Vec<MemoryMessage>) -> Result<()>;
 
     async fn list_messages(&self, request: MemoryRecallRequest) -> Result<Vec<MemoryMessage>>;
+
+    async fn clone_thread(&self, _request: CloneThreadRequest) -> Result<Thread> {
+        Err(MastraError::storage(
+            "memory engine does not support thread cloning",
+        ))
+    }
+
+    async fn delete_thread(&self, _thread_id: &str) -> Result<()> {
+        Err(MastraError::storage(
+            "memory engine does not support thread deletion",
+        ))
+    }
 }

@@ -10,7 +10,8 @@ use axum::{
 use chrono::Utc;
 use futures::StreamExt;
 use mastra_core::{
-    Agent, CreateThreadRequest, MemoryEngine, MemoryMessage, MemoryRecallRequest, Tool, Workflow,
+    Agent, CloneThreadRequest, CreateThreadRequest, MemoryEngine, MemoryMessage,
+    MemoryRecallRequest, Tool, Workflow,
 };
 use tracing::instrument;
 use uuid::Uuid;
@@ -18,12 +19,13 @@ use uuid::Uuid;
 use crate::{
     contracts::{
         AgentDetailResponse, AppendMemoryMessagesRequest, AppendMemoryMessagesResponse,
-        CreateMemoryThreadRequest, CreateMemoryThreadResponse, CreateWorkflowRunRequest,
-        ErrorResponse, ExecuteToolRequest, ExecuteToolResponse, GenerateRequest,
-        GenerateStreamEvent, GetMemoryThreadResponse, ListAgentsResponse, ListMemoriesResponse,
-        ListMemoryMessagesResponse, ListThreadsResponse, ListToolsResponse,
-        ListWorkflowRunsResponse, ListWorkflowsResponse, RouteDescription, StartWorkflowRunRequest,
-        StartWorkflowRunResponse, WorkflowDetailResponse, WorkflowRunRecord,
+        CloneMemoryThreadRequest, CloneMemoryThreadResponse, CreateMemoryThreadRequest,
+        CreateMemoryThreadResponse, CreateWorkflowRunRequest, ErrorResponse, ExecuteToolRequest,
+        ExecuteToolResponse, GenerateRequest, GenerateStreamEvent, GetMemoryThreadResponse,
+        ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse, ListThreadsResponse,
+        ListToolsResponse, ListWorkflowRunsResponse, ListWorkflowsResponse, RouteDescription,
+        StartWorkflowRunRequest, StartWorkflowRunResponse, WorkflowDetailResponse,
+        WorkflowRunRecord,
     },
     error::{ServerError, ServerResult},
     registry::RuntimeRegistry,
@@ -120,7 +122,11 @@ impl MastraServer {
             )
             .route(
                 "/memory/threads/{thread_id}",
-                get(get_default_memory_thread),
+                get(get_default_memory_thread).delete(delete_default_memory_thread),
+            )
+            .route(
+                "/memory/threads/{thread_id}/clone",
+                post(clone_default_memory_thread),
             )
             .route(
                 "/memory/threads/{thread_id}/messages",
@@ -132,7 +138,11 @@ impl MastraServer {
             )
             .route(
                 "/memory/{memory_id}/threads/{thread_id}",
-                get(get_memory_thread),
+                get(get_memory_thread).delete(delete_memory_thread),
+            )
+            .route(
+                "/memory/{memory_id}/threads/{thread_id}/clone",
+                post(clone_memory_thread),
             )
             .route(
                 "/memory/{memory_id}/threads/{thread_id}/messages",
@@ -215,6 +225,16 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
         ("POST", "/memory/threads", "Create a memory thread"),
         ("GET", "/memory/threads/{thread_id}", "Get a memory thread"),
         (
+            "DELETE",
+            "/memory/threads/{thread_id}",
+            "Delete a memory thread",
+        ),
+        (
+            "POST",
+            "/memory/threads/{thread_id}/clone",
+            "Clone a memory thread",
+        ),
+        (
             "GET",
             "/memory/threads/{thread_id}/messages",
             "List messages for a memory thread",
@@ -234,6 +254,16 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
             "GET",
             "/memory/{memory_id}/threads/{thread_id}",
             "Get a memory thread",
+        ),
+        (
+            "DELETE",
+            "/memory/{memory_id}/threads/{thread_id}",
+            "Delete a memory thread",
+        ),
+        (
+            "POST",
+            "/memory/{memory_id}/threads/{thread_id}/clone",
+            "Clone a memory thread",
         ),
         (
             "GET",
@@ -532,6 +562,85 @@ async fn get_memory_thread_for(
     Ok(Json(GetMemoryThreadResponse { thread }))
 }
 
+#[instrument(skip(state))]
+async fn delete_default_memory_thread(
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
+) -> ServerResult<StatusCode> {
+    let memory = state.registry.find_default_memory()?;
+    delete_memory_thread_for(memory, thread_id).await
+}
+
+#[instrument(skip(state))]
+async fn delete_memory_thread(
+    State(state): State<AppState>,
+    Path((memory_id, thread_id)): Path<(String, String)>,
+) -> ServerResult<StatusCode> {
+    let memory = state.registry.find_memory(&memory_id)?;
+    delete_memory_thread_for(memory, thread_id).await
+}
+
+async fn delete_memory_thread_for(
+    memory: Arc<dyn MemoryEngine>,
+    thread_id: String,
+) -> ServerResult<StatusCode> {
+    memory
+        .delete_thread(&thread_id)
+        .await
+        .map_err(ServerError::internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[instrument(skip(state, request))]
+async fn clone_default_memory_thread(
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
+    Json(request): Json<CloneMemoryThreadRequest>,
+) -> ServerResult<Json<CloneMemoryThreadResponse>> {
+    let memory = state.registry.find_default_memory()?;
+    clone_memory_thread_for(memory, thread_id, request).await
+}
+
+#[instrument(skip(state, request))]
+async fn clone_memory_thread(
+    State(state): State<AppState>,
+    Path((memory_id, thread_id)): Path<(String, String)>,
+    Json(request): Json<CloneMemoryThreadRequest>,
+) -> ServerResult<Json<CloneMemoryThreadResponse>> {
+    let memory = state.registry.find_memory(&memory_id)?;
+    clone_memory_thread_for(memory, thread_id, request).await
+}
+
+async fn clone_memory_thread_for(
+    memory: Arc<dyn MemoryEngine>,
+    source_thread_id: String,
+    request: CloneMemoryThreadRequest,
+) -> ServerResult<Json<CloneMemoryThreadResponse>> {
+    let thread = memory
+        .clone_thread(CloneThreadRequest {
+            source_thread_id,
+            new_thread_id: request.new_thread_id,
+            resource_id: request.resource_id,
+            title: request.title,
+            metadata: request.metadata,
+        })
+        .await
+        .map_err(ServerError::internal)?;
+
+    let cloned_messages = memory
+        .list_messages(MemoryRecallRequest {
+            thread_id: thread.id.clone(),
+            limit: None,
+        })
+        .await
+        .map_err(ServerError::internal)?;
+
+    Ok(Json(CloneMemoryThreadResponse {
+        thread,
+        cloned_messages,
+    }))
+}
+
 #[instrument(skip(state, request))]
 async fn append_default_memory_messages(
     State(state): State<AppState>,
@@ -706,9 +815,9 @@ mod tests {
     use chrono::Utc;
     use futures::{StreamExt, stream::BoxStream};
     use mastra_core::{
-        Agent, AgentConfig, CreateThreadRequest, FinishReason as CoreFinishReason, MemoryConfig,
-        MemoryEngine, MemoryMessage, MemoryRecallRequest, ModelRequest, ModelResponse,
-        ModelToolCall, StaticModel, Thread, Tool,
+        Agent, AgentConfig, CloneThreadRequest, CreateThreadRequest,
+        FinishReason as CoreFinishReason, MemoryConfig, MemoryEngine, MemoryMessage,
+        MemoryRecallRequest, ModelRequest, ModelResponse, ModelToolCall, StaticModel, Thread, Tool,
     };
     use parking_lot::RwLock;
     use serde_json::{Value, json};
@@ -897,6 +1006,66 @@ mod tests {
                 messages = messages[start..].to_vec();
             }
             Ok(messages)
+        }
+
+        async fn clone_thread(&self, request: CloneThreadRequest) -> mastra_core::Result<Thread> {
+            let source_thread = self
+                .threads
+                .read()
+                .get(&request.source_thread_id)
+                .cloned()
+                .ok_or_else(|| {
+                    mastra_core::MastraError::not_found(format!(
+                        "thread '{}' was not found",
+                        request.source_thread_id
+                    ))
+                })?;
+
+            let cloned_thread = Thread {
+                id: request
+                    .new_thread_id
+                    .unwrap_or_else(|| Uuid::now_v7().to_string()),
+                resource_id: request.resource_id.or(source_thread.resource_id),
+                title: request.title.or(source_thread.title),
+                created_at: Utc::now(),
+                metadata: request.metadata.unwrap_or(source_thread.metadata),
+            };
+
+            let cloned_messages = self
+                .messages
+                .read()
+                .get(&request.source_thread_id)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|message| MemoryMessage {
+                    id: Uuid::now_v7().to_string(),
+                    thread_id: cloned_thread.id.clone(),
+                    ..message
+                })
+                .collect::<Vec<_>>();
+
+            self.threads
+                .write()
+                .insert(cloned_thread.id.clone(), cloned_thread.clone());
+            self.messages
+                .write()
+                .insert(cloned_thread.id.clone(), cloned_messages);
+
+            Ok(cloned_thread)
+        }
+
+        async fn delete_thread(&self, thread_id: &str) -> mastra_core::Result<()> {
+            let removed = self.threads.write().remove(thread_id);
+            self.messages.write().remove(thread_id);
+
+            if removed.is_none() {
+                return Err(mastra_core::MastraError::not_found(format!(
+                    "thread '{thread_id}' was not found"
+                )));
+            }
+
+            Ok(())
         }
     }
 
@@ -1391,6 +1560,154 @@ mod tests {
             list_messages_payload["messages"][0]["content"],
             "hello from default memory"
         );
+    }
+
+    #[tokio::test]
+    async fn clones_default_memory_threads_and_keeps_history() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_memory("default", Arc::new(TestMemory::default()));
+        let router = server.into_router();
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/threads")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-1",
+                            "title": "Original thread",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let create_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let create_payload: Value = serde_json::from_slice(&create_body).unwrap();
+        let source_thread_id = create_payload["thread"]["id"].as_str().unwrap().to_owned();
+
+        let append_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/memory/threads/{source_thread_id}/messages"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages": [
+                                { "role": "user", "content": "hello" },
+                                { "role": "assistant", "content": "world" }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(append_response.status(), StatusCode::OK);
+
+        let clone_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/memory/threads/{source_thread_id}/clone"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "title": "Cloned thread",
+                            "metadata": { "cloned": true }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(clone_response.status(), StatusCode::OK);
+        let clone_body = to_bytes(clone_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let clone_payload: Value = serde_json::from_slice(&clone_body).unwrap();
+        assert_ne!(clone_payload["thread"]["id"], json!(source_thread_id));
+        assert_eq!(clone_payload["thread"]["title"], "Cloned thread");
+        assert_eq!(
+            clone_payload["cloned_messages"].as_array().unwrap().len(),
+            2
+        );
+        assert_eq!(clone_payload["cloned_messages"][0]["content"], "hello");
+        assert_eq!(clone_payload["cloned_messages"][1]["content"], "world");
+    }
+
+    #[tokio::test]
+    async fn deletes_default_memory_threads() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_memory("default", Arc::new(TestMemory::default()));
+        let router = server.into_router();
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/threads")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-delete",
+                            "title": "Delete me",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let create_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let create_payload: Value = serde_json::from_slice(&create_body).unwrap();
+        let thread_id = create_payload["thread"]["id"].as_str().unwrap().to_owned();
+
+        let delete_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/memory/threads/{thread_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+        let get_response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/memory/threads/{thread_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

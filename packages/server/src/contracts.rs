@@ -353,6 +353,26 @@ pub struct GetMemoryThreadResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CloneMemoryThreadRequest {
+    #[serde(default)]
+    #[serde(alias = "newThreadId")]
+    pub new_thread_id: Option<String>,
+    #[serde(default)]
+    #[serde(alias = "resourceId")]
+    pub resource_id: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CloneMemoryThreadResponse {
+    pub thread: Thread,
+    pub cloned_messages: Vec<MemoryMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ListThreadsResponse {
     pub threads: Vec<Thread>,
 }

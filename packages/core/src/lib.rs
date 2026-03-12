@@ -14,8 +14,8 @@ pub use agent::{
 pub use error::{MastraError, MastraErrorCode, Result};
 pub use mastra::{Mastra, MastraBuilder};
 pub use memory::{
-    CreateThreadRequest, MemoryConfig, MemoryEngine, MemoryMessage, MemoryRecallRequest,
-    MemoryRole, Thread,
+    CloneThreadRequest, CreateThreadRequest, MemoryConfig, MemoryEngine, MemoryMessage,
+    MemoryRecallRequest, MemoryRole, Thread,
 };
 pub use model::{
     FinishReason, LanguageModel, ModelEvent, ModelRequest, ModelResponse, ModelToolCall,
