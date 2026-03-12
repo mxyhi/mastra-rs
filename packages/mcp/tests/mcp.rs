@@ -38,9 +38,8 @@ async fn local_client_lists_tools_and_calls_tool() {
             "forecast": format!("sunny in {location}"),
         }))
     });
-    let server = McpServer::new(
-        McpServerConfig::new("test-server", "1.0.0").with_tool(weather_tool),
-    );
+    let server =
+        McpServer::new(McpServerConfig::new("test-server", "1.0.0").with_tool(weather_tool));
     let client = McpClient::local(server);
 
     let tools = client.list_tools().await.expect("tools should list");
@@ -95,16 +94,19 @@ async fn local_client_reads_resources_and_prompts() {
         .await
         .expect("prompt should exist");
     assert_eq!(prompt.messages.len(), 1);
-    assert_eq!(prompt.messages[0].content, "Summarize the work for {{topic}}");
+    assert_eq!(
+        prompt.messages[0].content,
+        "Summarize the work for {{topic}}"
+    );
 }
 
 #[tokio::test]
 async fn server_can_expose_agents_and_workflows_as_tools() {
     let agent = build_agent();
-    let workflow = Workflow::new("echo-workflow").then(Step::new(
-        "echo-step",
-        |input, _| async move { Ok(json!({ "workflow": input })) },
-    ));
+    let workflow = Workflow::new("echo-workflow")
+        .then(Step::new("echo-step", |input, _| async move {
+            Ok(json!({ "workflow": input }))
+        }));
 
     let server = McpServer::new(
         McpServerConfig::new("test-server", "1.0.0")
@@ -114,7 +116,10 @@ async fn server_can_expose_agents_and_workflows_as_tools() {
     let client = McpClient::local(server);
 
     let tools = client.list_tools().await.expect("tools should list");
-    let tool_names = tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>();
+    let tool_names = tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<Vec<_>>();
     assert!(tool_names.contains(&"ask_helper"));
     assert!(tool_names.contains(&"run_echo-workflow"));
 
@@ -134,9 +139,7 @@ async fn server_can_expose_agents_and_workflows_as_tools() {
 #[tokio::test]
 async fn agent_tool_forwards_request_context_values() {
     let agent = build_agent();
-    let server = McpServer::new(
-        McpServerConfig::new("test-server", "1.0.0").with_agent(agent),
-    );
+    let server = McpServer::new(McpServerConfig::new("test-server", "1.0.0").with_agent(agent));
     let client = McpClient::local(server);
 
     let result = client

@@ -4,3 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+async-trait = { workspace = true }
+base64 = "0.22.1"
+chrono = { workspace = true }
+mastra-observability-mastra = { path = "../mastra" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+mastra-observability--test-utils = { path = "../_test-utils" }

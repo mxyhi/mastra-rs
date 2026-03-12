@@ -1,11 +1,11 @@
 use indexmap::IndexMap;
-use mastra_core::{Agent, AgentGenerateRequest, RequestContext, Tool, ToolExecutionContext, Workflow};
+use mastra_core::{
+    Agent, AgentGenerateRequest, RequestContext, Tool, ToolExecutionContext, Workflow,
+};
 
 use crate::{
     error::{McpError, Result},
-    types::{
-        McpPrompt, McpResource, McpTool,
-    },
+    types::{McpPrompt, McpResource, McpTool},
 };
 
 #[derive(Clone)]

@@ -9,9 +9,7 @@ async fn dispatch_runs_matching_workflow_and_returns_output() {
         Ok(json!({ "value": value * 2 }))
     }));
 
-    let runtime = InngestRuntime::new().register(
-        RegisteredWorkflow::new("math/double", workflow),
-    );
+    let runtime = InngestRuntime::new().register(RegisteredWorkflow::new("math/double", workflow));
 
     let result = runtime
         .dispatch(
@@ -41,7 +39,10 @@ async fn runtime_lists_registered_bindings_in_stable_order() {
 async fn dispatch_returns_not_found_for_unknown_event() {
     let runtime = InngestRuntime::new();
     let error = runtime
-        .dispatch(InngestEvent::new("missing", json!(null)), RequestContext::new())
+        .dispatch(
+            InngestEvent::new("missing", json!(null)),
+            RequestContext::new(),
+        )
         .await
         .expect_err("unknown event should fail");
 

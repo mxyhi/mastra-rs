@@ -1,63 +1,37 @@
 # Findings
 
-## 2026-03-12 Baseline Scan
+## 2026-03-12
 
-### Workspace Shape
+### Current Verified Surface
 
-- Rust workspace 成员覆盖 `mastracode`、`packages/*`、`auth/*`、`client-sdks/*`、`deployers/*`、`observability/*`、`server-adapters/*`、`stores/*`、`voice/*`、`workflows/*`、`workspaces/*`、`integrations/*`、`pubsub/*`、`explorations/*`。
-- 证据：顶层 `Cargo.toml` workspace members。
+- `cargo test -p mastra-packages-auth` 通过，`packages/auth` 现已具备 bearer 解析、session callback、OIDC/JWK 验证能力。
+- `cargo test -p mastra-client-sdks-client-js` 通过，`client-js` 已能走真实 `MastraServer` 路由测试 agent/workflow/memory。
+- `cargo test -p mastra-client-sdks-ai-sdk` 通过，`ai-sdk` 已能把 message history 转成 agent generate 请求，并把响应适配为流式事件。
+- `cargo test -p mastra-client-sdks-react` 通过，`react` crate 现有真实 `ChatController` / `ChatState` 实现，不再只是测试壳。
+- `cargo test -p mastra-packages-deployer -p mastra-deployers-cloud -p mastra-deployers-cloudflare -p mastra-deployers-netlify -p mastra-deployers-vercel` 通过，说明共享 deployer 契约与四个 provider plan materialization 已可用。
+- `cargo test -p mastra-observability-mastra -p mastra-observability-datadog -p mastra-observability-langfuse -p mastra-observability-langsmith -p mastra-observability-posthog -p mastra-observability-sentry` 通过，说明 observability core 和五个 provider exporter 已具备真实 request builder 行为。
 
-### Crates With Material Code
+### Parallel Agent Findings
 
-- `packages/server/src/lib.rs` 576 行
-- `packages/server/src/router.rs` 531 行
-- `packages/core/src/mastra.rs` 503 行
-- `packages/core/src/agent.rs` 417 行
-- `packages/core/src/workflow.rs` 280 行
-- `packages/memory/src/in_memory.rs` 245 行
-- `stores/libsql/src/lib.rs` 608 行
-- `stores/pg/src/lib.rs` 129 行
-- `mastracode/src/lib.rs` 217 行
+- deployer worker 的结论是：`packages/deployer` 与 `deployers/*` 当前实现已足以支撑 targeted tests，无需再扩接口；保留其已有代码并纳入本轮整体验证即可。
+- observability worker/后台线程曾两次导致漂移：
+  - 一次把 `observability/datadog/src/lib.rs` 写成了 `})?];` 的非法结构，导致 `cargo test --workspace` 的 doctest 阶段失败。
+  - 一次只保留了 trait method，没有给五个 `Exporter` 暴露固有 `build_requests()`，导致 workspace integration tests 编译失败。
+- 这证明并行 agent 适合做 bounded 实现，但最终必须由主线程做一次全仓回归与接口一致性收口。
 
-### Mostly Placeholder Areas
+### Evidence of Remaining Non-Parity
 
-- `auth/*` 总计 112 行，8 个 crate，单 crate 多为 14 行。
-- `client-sdks/*` 总计 42 行，3 个 crate，单 crate 14 行。
-- `deployers/*` 总计 56 行，4 个 crate，单 crate 14 行。
-- `observability/*` 总计 182 行，13 个 crate，多数 14 行。
-- `voice/*` 总计 196 行，14 个 crate，多数 14 行。
-- `workflows/*` 总计 28 行，2 个 crate，多数 14 行。
-- `workspaces/*` 总计 84 行，6 个 crate，多数 14 行。
-- `pubsub/google-cloud-pubsub` 14 行。
+- `rg -l "fn add\\(|it_works\\(" --glob '!target' | wc -l` 返回 `78`，当前仍有 78 个 crate 保留生成模板级占位实现。
+- 占位 crate 示例：
+  - `auth/auth0/src/lib.rs`
+  - `stores/couchbase/src/lib.rs`
+  - `voice/openai/src/lib.rs`
+  - `workspaces/gcs/src/lib.rs`
+  - `packages/codemod/src/lib.rs`
+- 因此“workspace tests 全绿”只能证明当前代码可编译、现有测试通过，不能证明已经 1:1 复刻完整 Mastra monorepo。
 
-### Core Capabilities Already Present
+### Verification Notes
 
-- `packages/core` 已有：
-  - `Mastra` 注册与快照
-  - `Agent` 生成与流式响应
-  - `Workflow` 顺序 step 执行
-  - `Tool` / `Memory` / `RequestContext` / `Model` 基础契约
-- `packages/server` 已有：
-  - `axum` HTTP server
-  - agents / workflows / memories 路由
-  - runtime registry
-  - workflow run records
-
-### Initial Conclusion
-
-- 这个仓库不是从零开始，但距离“1:1 复刻 Mastra”仍差一个数量级。
-- 当前最合理路径不是横向把所有空壳同时填满，而是先闭合核心运行时，再把长尾 crate 接到统一契约上。
-
-## 2026-03-12 Test Baseline
-
-### Workspace Verification
-
-- `cargo test --workspace` 当前通过。
-- 这说明现有代码在“当前断言集”下可编译可运行。
-
-### Important Caveat
-
-- 通过的测试里，大量占位 crate 仍然只是：
-  - `pub fn add(left, right) -> left + right`
-  - `it_works()`
-- 因此当前全绿只能证明“骨架可编译”，不能证明“接近上游功能完整”。
+- 第一次 `cargo test --workspace` 在 `observability/datadog` doctest 阶段失败，原因是并行改写引入语法错误；已修复。
+- 第二次 `cargo test --workspace` 在 observability provider tests 编译阶段失败，原因是 exporter 缺少固有 `build_requests()`；已修复。
+- 第三次 `cargo test --workspace` 全量通过，说明当前工作树已稳定到可提交状态。

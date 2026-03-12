@@ -1,9 +1,13 @@
-use mastra_pubsub_google_cloud_pubsub::{GoogleCloudPubSub, GoogleCloudPubSubConfig, PubSubMessage};
+use mastra_pubsub_google_cloud_pubsub::{
+    GoogleCloudPubSub, GoogleCloudPubSubConfig, PubSubMessage,
+};
 
 #[tokio::test]
 async fn publish_and_pull_delivers_messages_in_order() {
     let pubsub = GoogleCloudPubSub::new(GoogleCloudPubSubConfig::new("demo-project"));
-    pubsub.create_topic("jobs").expect("topic should be created");
+    pubsub
+        .create_topic("jobs")
+        .expect("topic should be created");
     pubsub
         .create_subscription("jobs-sub", "jobs")
         .expect("subscription should be created");
@@ -24,7 +28,9 @@ async fn publish_and_pull_delivers_messages_in_order() {
 #[tokio::test]
 async fn acked_messages_are_not_redelivered() {
     let pubsub = GoogleCloudPubSub::new(GoogleCloudPubSubConfig::new("demo-project"));
-    pubsub.create_topic("jobs").expect("topic should be created");
+    pubsub
+        .create_topic("jobs")
+        .expect("topic should be created");
     pubsub
         .create_subscription("jobs-sub", "jobs")
         .expect("subscription should be created");
@@ -38,7 +44,9 @@ async fn acked_messages_are_not_redelivered() {
         .ack("jobs-sub", [first_batch[0].ack_id.clone()])
         .expect("ack should succeed");
 
-    let second_batch = pubsub.pull("jobs-sub", 10).expect("second pull should succeed");
+    let second_batch = pubsub
+        .pull("jobs-sub", 10)
+        .expect("second pull should succeed");
     assert!(second_batch.is_empty());
 }
 

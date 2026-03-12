@@ -47,8 +47,7 @@ impl InngestRuntime {
     }
 
     pub fn register(mut self, workflow: RegisteredWorkflow) -> Self {
-        self.workflows
-            .insert(workflow.event_name.clone(), workflow);
+        self.workflows.insert(workflow.event_name.clone(), workflow);
         self
     }
 
@@ -61,10 +60,9 @@ impl InngestRuntime {
         event: InngestEvent,
         request_context: RequestContext,
     ) -> Result<WorkflowRunResult> {
-        let workflow = self
-            .workflows
-            .get(&event.name)
-            .ok_or_else(|| MastraError::not_found(format!("no workflow registered for event '{}'", event.name)))?;
+        let workflow = self.workflows.get(&event.name).ok_or_else(|| {
+            MastraError::not_found(format!("no workflow registered for event '{}'", event.name))
+        })?;
         workflow.workflow.run(event.payload, request_context).await
     }
 }

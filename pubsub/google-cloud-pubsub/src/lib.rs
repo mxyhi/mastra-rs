@@ -120,7 +120,12 @@ impl GoogleCloudPubSub {
         if state.topics.contains_key(&topic) {
             return Err(PubSubError::TopicAlreadyExists(topic));
         }
-        state.topics.insert(topic, TopicState { messages: Vec::new() });
+        state.topics.insert(
+            topic,
+            TopicState {
+                messages: Vec::new(),
+            },
+        );
         Ok(())
     }
 
@@ -184,7 +189,10 @@ impl GoogleCloudPubSub {
             if subscription_state.acked_message_ids.contains(&message.id) {
                 continue;
             }
-            if subscription_state.delivered_message_ids.contains(&message.id) {
+            if subscription_state
+                .delivered_message_ids
+                .contains(&message.id)
+            {
                 continue;
             }
             subscription_state

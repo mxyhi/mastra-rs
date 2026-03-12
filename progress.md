@@ -1,35 +1,33 @@
-# Progress Log
+# Progress
 
 ## 2026-03-12
 
-### Session Start
-
-- 用户要求一次性完成 `mastra-rs`，不中途分批，自动提交 commit，并使用多个 agent 并行开发。
-
-### Completed
-
-- 读取 `planning-with-files`、`brainstorming`、`test-driven-development` 技能说明。
-- 检索 memory 中与 Mastra 相关的历史记录，确认仅有 `mastracode` 文档决策类上下文，可作为低优先参考。
-- 扫描 workspace 文件结构，确认当前仓库为大规模 monorepo 骨架。
-- 统计各目录 `.rs` 文件规模，确认大量 crate 为占位实现。
-- 运行 `cargo test --workspace`，当前工作区测试通过。
-- 启动两个 explorer agent：
-  - Agent A：分析当前 Rust 仓库与 `.ref/mastra` 的结构差距。
-  - Agent B：分析上游 `.ref/mastra` 的核心能力边界和复刻优先级。
-- 产出执行计划，并写入 `task_plan.md` / `findings.md` / `progress.md`。
-
-### In Progress
-
-- 拉取官方 Mastra 文档与上游源码结构，校准“核心可运行闭环”的目标边界。
-- 等待 explorer agent 返回证据，再决定第一批并行实现切片。
-
-### Errors Encountered
-
-- `git add task_plan.md findings.md progress.md` 失败，原因是这些规划文件被 `.gitignore` 忽略。
-- 处理策略：保留规划文件，并在需要提交时使用 `git add -f` 强制纳入版本控制。
-
-### Known Risks
-
-- 用户目标中的“1:1 完整复刻”范围极大，可能需要在执行中把“完整”收敛为“核心功能完整 + 其余模块具备真实接口和明确边界”。
-- 需要避免把大量 provider crate 做成“看起来有代码但不可用”的假实现。
-- 当前测试绿灯存在失真：许多 crate 的测试只是验证占位函数 `add(2, 2)`。
+- 读取 `planning-with-files` / `brainstorming` / `test-driven-development` skill，并确认当前任务属于复杂收口型工作，继续维护三份落盘文件。
+- 盘点 `git status --short`、`git log --oneline -n 8`，确认已有提交：
+  - `4ec4939 chore(plan): capture mastra-rs execution baseline`
+  - `820db0a feat(runtime): add mcp pubsub and inngest primitives`
+- 定向验证已完成模块：
+  - `cargo test -p mastra-packages-auth`
+  - `cargo test -p mastra-client-sdks-client-js`
+  - `cargo test -p mastra-client-sdks-ai-sdk`
+  - `cargo test -p mastra-client-sdks-react`
+  - 上述均通过。
+- 扫描 workspace 占位实现：
+  - `rg -n "fn add\\(|add\\(2, 2\\)|it_works|placeholder|todo!|unimplemented!" --glob '!target'`
+  - 结果显示大量 crate 仍是模板级占位。
+- 定向收口 deployer / observability：
+  - `cargo test -p mastra-packages-deployer -p mastra-deployers-cloud -p mastra-deployers-cloudflare -p mastra-deployers-netlify -p mastra-deployers-vercel`
+  - `cargo test -p mastra-observability-mastra -p mastra-observability-datadog -p mastra-observability-langfuse -p mastra-observability-langsmith -p mastra-observability-posthog -p mastra-observability-sentry`
+  - 均通过。
+- 并行协调：
+  - deployer worker 复核并确认 provider 适配已可用；
+  - observability 方向曾发生后台改写回归，主线程已接管最终修复。
+- 全仓回归：
+  - 首次 `cargo test --workspace` 失败于 `observability/datadog` doctest 语法错误；
+  - 修复 `observability/datadog/src/lib.rs` 后再次执行；
+  - 第二次失败于五个 exporter 缺少固有 `build_requests()`；
+  - 已为 `DatadogExporter` / `LangfuseExporter` / `LangSmithExporter` / `PostHogExporter` / `SentryExporter` 补齐固有方法；
+  - 第三次 `cargo test --workspace` 全量通过。
+- 当前真实结论：
+  - 本轮把一批“半成品/占位”模块做成了真实可测实现；
+  - 但仓库整体仍存在 `78` 个 `it_works/add(2,2)` 占位 crate，尚不能据实宣称“1:1 复刻全部完成”。
