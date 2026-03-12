@@ -10,11 +10,12 @@ pub use error::MastraClientError;
 pub use types::{
     AgentMessages, AgentSummary, AppendMemoryMessagesRequest, AppendMemoryMessagesResponse,
     ChatMessage, CreateMemoryThreadRequest, CreateMemoryThreadResponse, CreateWorkflowRunRequest,
-    ErrorResponse, FinishReason, GenerateRequest, GenerateResponse, ListAgentsResponse,
-    ListMemoriesResponse, ListMemoryMessagesResponse, ListThreadsResponse, ListWorkflowsResponse,
-    MemoryMessageInput, MemoryMessageRole, MemorySummary, RouteDescription,
-    StartWorkflowRunRequest, StartWorkflowRunResponse, UsageStats, WorkflowRunRecord,
-    WorkflowRunRef, WorkflowRunStatus, WorkflowSummary,
+    ErrorResponse, FinishReason, GenerateRequest, GenerateResponse, GenerateStreamEvent,
+    GenerateStreamFinishEvent, GenerateStreamStartEvent, GenerateStreamTextDeltaEvent,
+    ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse, ListThreadsResponse,
+    ListWorkflowsResponse, MemoryMessageInput, MemoryMessageRole, MemorySummary,
+    RouteDescription, StartWorkflowRunRequest, StartWorkflowRunResponse, UsageStats,
+    WorkflowRunRecord, WorkflowRunRef, WorkflowRunStatus, WorkflowSummary,
 };
 
 #[cfg(test)]

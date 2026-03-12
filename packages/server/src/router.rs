@@ -1,12 +1,14 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{convert::Infallible, net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
 };
 use chrono::Utc;
+use futures::StreamExt;
 use mastra_core::{
     Agent, CreateThreadRequest, MemoryEngine, MemoryMessage, MemoryRecallRequest, Workflow,
 };
@@ -16,10 +18,10 @@ use uuid::Uuid;
 use crate::{
     contracts::{
         AppendMemoryMessagesRequest, AppendMemoryMessagesResponse, CreateMemoryThreadRequest,
-        CreateMemoryThreadResponse, CreateWorkflowRunRequest, GenerateRequest, ListAgentsResponse,
-        ListMemoriesResponse, ListMemoryMessagesResponse, ListThreadsResponse,
-        ListWorkflowsResponse, RouteDescription, StartWorkflowRunRequest, StartWorkflowRunResponse,
-        WorkflowRunRecord,
+        CreateMemoryThreadResponse, CreateWorkflowRunRequest, ErrorResponse, GenerateRequest,
+        GenerateStreamEvent, ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse,
+        ListThreadsResponse, ListWorkflowsResponse, RouteDescription, StartWorkflowRunRequest,
+        StartWorkflowRunResponse, WorkflowRunRecord,
     },
     error::{ServerError, ServerResult},
     registry::RuntimeRegistry,
@@ -48,6 +50,7 @@ pub struct MastraServer {
 #[derive(Clone)]
 struct AppState {
     registry: RuntimeRegistry,
+    api_prefix: String,
 }
 
 impl MastraServer {
@@ -90,8 +93,11 @@ impl MastraServer {
 
     pub fn into_router(self) -> Router {
         let api_router = Router::new()
+            .route("/health", get(health))
+            .route("/routes", get(routes))
             .route("/agents", get(list_agents))
             .route("/agents/{agent_id}/generate", post(generate_agent))
+            .route("/agents/{agent_id}/stream", post(stream_agent))
             .route("/memories", get(list_memories))
             .route(
                 "/memory/{memory_id}/threads",
@@ -116,6 +122,7 @@ impl MastraServer {
             )
             .with_state(AppState {
                 registry: self.registry.clone(),
+                api_prefix: normalize_prefix(&self.config.api_prefix),
             });
 
         let prefix = normalize_prefix(&self.config.api_prefix);
@@ -139,11 +146,18 @@ impl MastraServer {
 pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
     let prefix = normalize_prefix(prefix);
     [
+        ("GET", "/health", "Health check"),
+        ("GET", "/routes", "List registered routes"),
         ("GET", "/agents", "List registered agents"),
         (
             "POST",
             "/agents/{agent_id}/generate",
             "Generate an agent response",
+        ),
+        (
+            "POST",
+            "/agents/{agent_id}/stream",
+            "Stream an agent response",
         ),
         ("GET", "/memories", "List registered memories"),
         ("GET", "/memory/{memory_id}/threads", "List memory threads"),
@@ -197,6 +211,14 @@ fn normalize_prefix(prefix: &str) -> String {
     }
 }
 
+async fn health() -> &'static str {
+    "ok"
+}
+
+async fn routes(State(state): State<AppState>) -> Json<Vec<RouteDescription>> {
+    Json(route_catalog(&state.api_prefix))
+}
+
 #[instrument(skip(state))]
 async fn list_agents(State(state): State<AppState>) -> Json<ListAgentsResponse> {
     Json(ListAgentsResponse {
@@ -213,6 +235,26 @@ async fn generate_agent(
     let agent = state.registry.find_agent(&agent_id)?;
     let response = agent.generate(request).await?;
     Ok(Json(response))
+}
+
+#[instrument(skip(state, request))]
+async fn stream_agent(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(request): Json<GenerateRequest>,
+) -> ServerResult<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>> {
+    let agent = state.registry.find_agent(&agent_id)?;
+    let stream = agent.stream(request).map(|result| {
+        let event = match result {
+            Ok(event) => encode_stream_event(event),
+            Err(error) => encode_stream_event(GenerateStreamEvent::Error(ErrorResponse {
+                error: error.to_string(),
+            })),
+        };
+        Ok::<_, Infallible>(event)
+    });
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
 
 #[instrument(skip(state))]
@@ -368,6 +410,20 @@ async fn get_workflow_run(
     Ok(Json(run))
 }
 
+fn encode_stream_event(event: GenerateStreamEvent) -> Event {
+    let data = serde_json::to_string(&event).unwrap_or_else(|error| {
+        serde_json::json!({
+            "type": "error",
+            "error": {
+                "error": error.to_string(),
+            },
+        })
+        .to_string()
+    });
+
+    Event::default().event(event.event_name()).data(data)
+}
+
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
@@ -375,13 +431,16 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
+    use futures::{StreamExt, stream::BoxStream};
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
     use crate::{
         contracts::{
             AgentMessages, AgentSummary, FinishReason, GenerateRequest, GenerateResponse,
-            StartWorkflowRunRequest, WorkflowRunStatus, WorkflowSummary,
+            GenerateStreamEvent, GenerateStreamFinishEvent, GenerateStreamStartEvent,
+            GenerateStreamTextDeltaEvent, StartWorkflowRunRequest, WorkflowRunStatus,
+            WorkflowSummary,
         },
         registry::RuntimeRegistry,
         runtime::{AgentRuntime, WorkflowRuntime},
@@ -410,6 +469,37 @@ mod tests {
                 finish_reason: FinishReason::Stop,
                 usage: None,
             })
+        }
+
+        fn stream(
+            &self,
+            request: GenerateRequest,
+        ) -> BoxStream<'static, crate::error::ServerResult<GenerateStreamEvent>> {
+            let text = format!("echo: {}", request.messages.flatten_text());
+            let run_id = request.run_id.unwrap_or_else(|| "test-run".to_owned());
+            let message_id = "message-1".to_owned();
+
+            futures::stream::iter(vec![
+                Ok(GenerateStreamEvent::Start(GenerateStreamStartEvent {
+                    run_id: run_id.clone(),
+                    message_id: message_id.clone(),
+                    thread_id: None,
+                })),
+                Ok(GenerateStreamEvent::TextDelta(GenerateStreamTextDeltaEvent {
+                    run_id: run_id.clone(),
+                    message_id: message_id.clone(),
+                    delta: text.clone(),
+                })),
+                Ok(GenerateStreamEvent::Finish(GenerateStreamFinishEvent {
+                    run_id,
+                    message_id,
+                    thread_id: None,
+                    text,
+                    finish_reason: FinishReason::Stop,
+                    usage: None,
+                })),
+            ])
+            .boxed()
         }
     }
 
@@ -488,6 +578,39 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let payload: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(payload["text"], "echo: hello");
+    }
+
+    #[tokio::test]
+    async fn streams_agent_responses_as_sse_events() {
+        let request = serde_json::to_vec(&GenerateRequest {
+            messages: AgentMessages::Text("hello".to_owned()),
+            resource_id: None,
+            thread_id: None,
+            run_id: Some("run-123".to_owned()),
+            max_steps: Some(1),
+            request_context: Default::default(),
+        })
+        .unwrap();
+
+        let response = build_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/agents/echo/stream")
+                    .header("content-type", "application/json")
+                    .body(Body::from(request))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("event: start"));
+        assert!(body.contains("event: text_delta"));
+        assert!(body.contains("event: finish"));
+        assert!(body.contains("\"run_id\":\"run-123\""));
     }
 
     #[tokio::test]

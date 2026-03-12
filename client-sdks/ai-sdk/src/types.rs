@@ -1,4 +1,5 @@
 use indexmap::IndexMap;
+use futures::stream::BoxStream;
 use mastra_client_sdks_client_js::{FinishReason, GenerateResponse, UsageStats};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -95,6 +96,8 @@ pub enum AiSdkEvent {
     Finish(AiSdkFinishEvent),
 }
 
+pub type AiSdkEventStream = BoxStream<'static, Result<AiSdkEvent, AiSdkError>>;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AiSdkRun {
     pub run_id: String,
@@ -153,12 +156,20 @@ impl AssistantMessageAccumulator {
         self.current_message.as_ref()
     }
 
+    pub fn into_message(self) -> Option<AiSdkMessage> {
+        self.current_message
+    }
+
     pub fn usage(&self) -> Option<&UsageStats> {
         self.usage.as_ref()
     }
 
     pub fn finish_reason(&self) -> Option<&FinishReason> {
         self.finish_reason.as_ref()
+    }
+
+    pub fn run_id(&self) -> Option<&str> {
+        self.run_id.as_deref()
     }
 }
 

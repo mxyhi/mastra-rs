@@ -88,6 +88,54 @@ pub struct GenerateResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GenerateStreamStartEvent {
+    pub run_id: String,
+    pub message_id: String,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GenerateStreamTextDeltaEvent {
+    pub run_id: String,
+    pub message_id: String,
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GenerateStreamFinishEvent {
+    pub run_id: String,
+    pub message_id: String,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    pub text: String,
+    #[serde(default)]
+    pub finish_reason: FinishReason,
+    #[serde(default)]
+    pub usage: Option<UsageStats>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum GenerateStreamEvent {
+    Start(GenerateStreamStartEvent),
+    TextDelta(GenerateStreamTextDeltaEvent),
+    Finish(GenerateStreamFinishEvent),
+    Error(ErrorResponse),
+}
+
+impl GenerateStreamEvent {
+    pub fn event_name(&self) -> &'static str {
+        match self {
+            Self::Start(_) => "start",
+            Self::TextDelta(_) => "text_delta",
+            Self::Finish(_) => "finish",
+            Self::Error(_) => "error",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateWorkflowRunRequest {
     #[serde(default)]
     pub resource_id: Option<String>,

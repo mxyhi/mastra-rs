@@ -1,6 +1,7 @@
+use futures::StreamExt;
 use mastra_client_sdks_ai_sdk::{
     AiSdkAgent, AiSdkError, AiSdkEvent, AiSdkEventSource, AiSdkGenerateRequest, AiSdkMessage,
-    AiSdkRole, AiSdkRun,
+    AiSdkRole, AiSdkRun, AssistantMessageAccumulator,
 };
 
 use crate::{ChatAction, ChatState};
@@ -56,12 +57,37 @@ where
     }
 
     pub async fn run(&mut self, request: AiSdkGenerateRequest) -> Result<AiSdkRun, AiSdkError> {
-        match self.source.generate(request).await {
-            Ok(run) => {
-                for event in &run.events {
+        match self.source.stream(request).await {
+            Ok(mut stream) => {
+                let mut events = Vec::new();
+                let mut accumulator = AssistantMessageAccumulator::default();
+
+                while let Some(event) = stream.next().await {
+                    let event = event?;
+                    accumulator.apply(&event);
                     self.state.apply(ChatAction::ApplyEvent(event.clone()));
+                    events.push(event);
                 }
-                Ok(run)
+
+                let assistant_message = accumulator
+                    .clone()
+                    .into_message()
+                    .ok_or_else(|| AiSdkError::Validation("assistant stream returned no final message".to_owned()))?;
+                let run_id = accumulator
+                    .run_id()
+                    .map(str::to_owned)
+                    .unwrap_or_default();
+
+                Ok(AiSdkRun {
+                    run_id,
+                    assistant_message: assistant_message.clone(),
+                    raw: mastra_client_sdks_ai_sdk::GenerateResponse {
+                        text: assistant_message.content.clone(),
+                        finish_reason: accumulator.finish_reason().cloned().unwrap_or_default(),
+                        usage: accumulator.usage().cloned(),
+                    },
+                    events,
+                })
             }
             Err(error) => {
                 self.state.apply(ChatAction::Fail(error.to_string()));

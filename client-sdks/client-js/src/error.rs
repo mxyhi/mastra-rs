@@ -13,6 +13,8 @@ pub enum MastraClientError {
     Transport(reqwest::Error),
     #[error("failed to decode response body: {0}")]
     Decode(reqwest::Error),
+    #[error("stream protocol error: {0}")]
+    StreamProtocol(String),
     #[error("api returned {status}: {body}")]
     Api {
         status: StatusCode,

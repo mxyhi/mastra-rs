@@ -1,10 +1,17 @@
 use async_trait::async_trait;
-use mastra_core::{Agent, AgentGenerateRequest, RequestContext, Workflow};
+use async_stream::stream;
+use futures::{StreamExt, stream::BoxStream};
+use mastra_core::{
+    Agent, AgentGenerateRequest, AgentStreamRequest, ModelEvent, RequestContext, Workflow,
+};
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::{
     contracts::{
-        AgentSummary, GenerateRequest, GenerateResponse, StartWorkflowRunRequest, WorkflowSummary,
+        AgentSummary, FinishReason, GenerateRequest, GenerateResponse, GenerateStreamEvent,
+        GenerateStreamFinishEvent, GenerateStreamStartEvent, GenerateStreamTextDeltaEvent,
+        StartWorkflowRunRequest, UsageStats, WorkflowSummary,
     },
     error::{ServerError, ServerResult},
 };
@@ -14,6 +21,11 @@ pub trait AgentRuntime: Send + Sync {
     fn summary(&self) -> AgentSummary;
 
     async fn generate(&self, request: GenerateRequest) -> ServerResult<GenerateResponse>;
+
+    fn stream(
+        &self,
+        request: GenerateRequest,
+    ) -> BoxStream<'static, ServerResult<GenerateStreamEvent>>;
 }
 
 #[async_trait]
@@ -56,14 +68,80 @@ impl AgentRuntime for CoreAgentRuntime {
             .await
             .map_err(ServerError::internal)?;
 
-        Ok(GenerateResponse {
-            text: response.text,
-            finish_reason: crate::contracts::FinishReason::Stop,
-            usage: Some(crate::contracts::UsageStats {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-            }),
-        })
+        Ok(generate_response_from_parts(response.text, &response.data))
+    }
+
+    fn stream(
+        &self,
+        request: GenerateRequest,
+    ) -> BoxStream<'static, ServerResult<GenerateStreamEvent>> {
+        let run_id = request
+            .run_id
+            .clone()
+            .unwrap_or_else(|| Uuid::now_v7().to_string());
+        let message_id = Uuid::now_v7().to_string();
+        let upstream = self.agent.stream(AgentStreamRequest {
+            prompt: request.messages.flatten_text(),
+            thread_id: request.thread_id,
+            resource_id: request.resource_id,
+            request_context: RequestContext::from_value_map(request.request_context),
+        });
+
+        stream! {
+            let mut emitted_start = false;
+            let mut emitted_delta = false;
+            let mut last_thread_id = None;
+            tokio::pin!(upstream);
+
+            while let Some(event) = upstream.next().await {
+                let event = event.map_err(ServerError::internal)?;
+                if !emitted_start {
+                    emitted_start = true;
+                    last_thread_id = event.thread_id.clone();
+                    yield Ok(GenerateStreamEvent::Start(GenerateStreamStartEvent {
+                        run_id: run_id.clone(),
+                        message_id: message_id.clone(),
+                        thread_id: event.thread_id.clone(),
+                    }));
+                }
+
+                match event.event {
+                    ModelEvent::TextDelta(delta) => {
+                        if delta.is_empty() {
+                            continue;
+                        }
+                        emitted_delta = true;
+                        yield Ok(GenerateStreamEvent::TextDelta(GenerateStreamTextDeltaEvent {
+                            run_id: run_id.clone(),
+                            message_id: message_id.clone(),
+                            delta,
+                        }));
+                    }
+                    ModelEvent::Done(response) => {
+                        let normalized = generate_response_from_parts(
+                            response.text.clone(),
+                            &response.data,
+                        );
+                        if !emitted_delta && !normalized.text.is_empty() {
+                            yield Ok(GenerateStreamEvent::TextDelta(GenerateStreamTextDeltaEvent {
+                                run_id: run_id.clone(),
+                                message_id: message_id.clone(),
+                                delta: normalized.text.clone(),
+                            }));
+                        }
+                        yield Ok(GenerateStreamEvent::Finish(GenerateStreamFinishEvent {
+                            run_id: run_id.clone(),
+                            message_id: message_id.clone(),
+                            thread_id: event.thread_id.clone().or(last_thread_id.clone()),
+                            text: normalized.text,
+                            finish_reason: normalized.finish_reason,
+                            usage: normalized.usage,
+                        }));
+                    }
+                }
+            }
+        }
+        .boxed()
     }
 }
 
@@ -99,4 +177,34 @@ impl WorkflowRuntime for CoreWorkflowRuntime {
             .map_err(ServerError::internal)?;
         Ok(result.output)
     }
+}
+
+fn generate_response_from_parts(text: String, data: &Value) -> GenerateResponse {
+    GenerateResponse {
+        text,
+        finish_reason: extract_finish_reason(data),
+        usage: extract_usage(data),
+    }
+}
+
+fn extract_finish_reason(data: &Value) -> FinishReason {
+    let Some(value) = data.get("finish_reason").and_then(Value::as_str) else {
+        return FinishReason::Stop;
+    };
+
+    match value {
+        "tool_call" | "tool_calls" => FinishReason::ToolCall,
+        "length" => FinishReason::Length,
+        _ => FinishReason::Stop,
+    }
+}
+
+fn extract_usage(data: &Value) -> Option<UsageStats> {
+    let usage = data.get("usage")?;
+    let prompt_tokens = usage.get("prompt_tokens")?.as_u64()?;
+    let completion_tokens = usage.get("completion_tokens")?.as_u64()?;
+    Some(UsageStats {
+        prompt_tokens: prompt_tokens as u32,
+        completion_tokens: completion_tokens as u32,
+    })
 }

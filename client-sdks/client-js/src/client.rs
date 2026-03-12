@@ -1,7 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
+use async_stream::try_stream;
+use futures::{Stream, StreamExt};
 use reqwest::{
-    Method, StatusCode,
+    Method, Response, StatusCode,
     header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue},
 };
 use serde::Serialize;
@@ -13,9 +15,9 @@ use crate::{
     types::{
         AppendMemoryMessagesRequest, AppendMemoryMessagesResponse, CreateMemoryThreadRequest,
         CreateMemoryThreadResponse, CreateWorkflowRunRequest, ErrorResponse, GenerateRequest,
-        GenerateResponse, ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse,
-        ListThreadsResponse, ListWorkflowsResponse, StartWorkflowRunRequest,
-        StartWorkflowRunResponse, WorkflowRunRecord,
+        GenerateResponse, GenerateStreamEvent, ListAgentsResponse, ListMemoriesResponse,
+        ListMemoryMessagesResponse, ListThreadsResponse, ListWorkflowsResponse,
+        StartWorkflowRunRequest, StartWorkflowRunResponse, WorkflowRunRecord,
     },
 };
 
@@ -231,6 +233,22 @@ impl AgentClient {
             .await
     }
 
+    pub async fn stream(
+        &self,
+        request: GenerateRequest,
+    ) -> Result<impl Stream<Item = Result<GenerateStreamEvent, MastraClientError>> + Send + 'static, MastraClientError>
+    {
+        let response = self
+            .inner
+            .stream_request(
+                Method::POST,
+                &format!("/agents/{}/stream", self.agent_id),
+                Some(&request),
+            )
+            .await?;
+        Ok(decode_event_stream(response))
+    }
+
     pub async fn generate_text(
         &self,
         prompt: impl Into<String>,
@@ -357,15 +375,41 @@ impl MemoryClient {
 }
 
 impl ClientInner {
-    async fn request<Response, Body>(
+    async fn request<ResponseBody, RequestBody>(
         &self,
         method: Method,
         path: &str,
-        body: Option<&Body>,
+        body: Option<&RequestBody>,
+    ) -> Result<ResponseBody, MastraClientError>
+    where
+        ResponseBody: DeserializeOwned,
+        RequestBody: Serialize + ?Sized,
+    {
+        let response = self.send(method, path, body).await?;
+        decode_response(response).await
+    }
+
+    async fn stream_request<RequestBody>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&RequestBody>,
     ) -> Result<Response, MastraClientError>
     where
-        Response: DeserializeOwned,
-        Body: Serialize + ?Sized,
+        RequestBody: Serialize + ?Sized,
+    {
+        let response = self.send(method, path, body).await?;
+        ensure_success(response).await
+    }
+
+    async fn send<RequestBody>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&RequestBody>,
+    ) -> Result<Response, MastraClientError>
+    where
+        RequestBody: Serialize + ?Sized,
     {
         let url = self.endpoint(path)?;
         let request = self.http.request(method, url);
@@ -374,8 +418,7 @@ impl ClientInner {
         } else {
             request
         };
-        let response = request.send().await.map_err(MastraClientError::Transport)?;
-        decode_response(response).await
+        request.send().await.map_err(MastraClientError::Transport)
     }
 
     fn endpoint(&self, path: &str) -> Result<Url, MastraClientError> {
@@ -394,15 +437,20 @@ impl ClientInner {
     }
 }
 
-async fn decode_response<Response>(
-    response: reqwest::Response,
-) -> Result<Response, MastraClientError>
+async fn decode_response<ResponseBody>(
+    response: Response,
+) -> Result<ResponseBody, MastraClientError>
 where
-    Response: DeserializeOwned,
+    ResponseBody: DeserializeOwned,
 {
+    let response = ensure_success(response).await?;
+    response.json().await.map_err(MastraClientError::Decode)
+}
+
+async fn ensure_success(response: Response) -> Result<Response, MastraClientError> {
     let status = response.status();
     if status.is_success() {
-        return response.json().await.map_err(MastraClientError::Decode);
+        return Ok(response);
     }
 
     let body = response.text().await.map_err(MastraClientError::Decode)?;
@@ -417,6 +465,76 @@ where
         body: message,
         error,
     })
+}
+
+fn decode_event_stream(
+    response: Response,
+) -> impl Stream<Item = Result<GenerateStreamEvent, MastraClientError>> + Send + 'static {
+    try_stream! {
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+        let mut current_event = None::<String>;
+        let mut data_lines = Vec::<String>::new();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(MastraClientError::Transport)?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(index) = buffer.find('\n') {
+                let mut line = buffer[..index].to_owned();
+                buffer.drain(..=index);
+
+                if line.ends_with('\r') {
+                    line.pop();
+                }
+
+                if line.is_empty() {
+                    if let Some(event) = flush_event(&mut current_event, &mut data_lines)? {
+                        yield event;
+                    }
+                    continue;
+                }
+
+                if line.starts_with(':') {
+                    continue;
+                }
+
+                if let Some(rest) = line.strip_prefix("event:") {
+                    current_event = Some(rest.trim().to_owned());
+                    continue;
+                }
+
+                if let Some(rest) = line.strip_prefix("data:") {
+                    data_lines.push(rest.trim_start().to_owned());
+                }
+            }
+        }
+
+        if let Some(event) = flush_event(&mut current_event, &mut data_lines)? {
+            yield event;
+        }
+    }
+}
+
+fn flush_event(
+    current_event: &mut Option<String>,
+    data_lines: &mut Vec<String>,
+) -> Result<Option<GenerateStreamEvent>, MastraClientError> {
+    if data_lines.is_empty() {
+        *current_event = None;
+        return Ok(None);
+    }
+
+    let payload = data_lines.join("\n");
+    data_lines.clear();
+    let parsed = serde_json::from_str::<GenerateStreamEvent>(&payload)
+        .map_err(|error| MastraClientError::StreamProtocol(error.to_string()))?;
+    *current_event = None;
+
+    match parsed {
+        GenerateStreamEvent::Error(error) => Err(MastraClientError::StreamProtocol(error.error)),
+        event => Ok(Some(event)),
+    }
 }
 
 fn normalize_api_prefix(prefix: &str) -> String {

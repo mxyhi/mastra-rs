@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+async-stream.workspace = true
+futures.workspace = true
 indexmap.workspace = true
 mastra-core = { path = "../../packages/core" }
 mastra-server = { path = "../../packages/server" }
