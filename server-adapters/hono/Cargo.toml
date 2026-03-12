@@ -1,0 +1,11 @@
+[package]
+name = "mastra-server-adapter-hono"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum.workspace = true
+mastra-server = { path = "../../packages/server" }
+tokio.workspace = true

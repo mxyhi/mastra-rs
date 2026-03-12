@@ -1,0 +1,10 @@
+[package]
+name = "mastracode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+clap.workspace = true
+mastra-core = { path = "../packages/core" }

@@ -1,0 +1,18 @@
+[package]
+name = "mastra-store-libsql"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+mastra-core = { path = "../../packages/core" }
+mastra-memory = { path = "../../packages/memory" }
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

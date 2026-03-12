@@ -1,0 +1,12 @@
+[package]
+name = "mastra-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+clap.workspace = true
+mastra-core = { path = "../core" }
+mastra-server = { path = "../server" }
+tokio.workspace = true

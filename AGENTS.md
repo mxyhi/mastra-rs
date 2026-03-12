@@ -4,4 +4,4 @@
 
 ## ref:
 
-- [mastra:https://github.com/mastra-ai/mastra](./.ref/mastra)
+- [mastra](./.ref/mastra)
