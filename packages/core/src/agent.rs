@@ -138,6 +138,7 @@ impl Agent {
         let max_steps = max_steps.unwrap_or(DEFAULT_AGENT_MAX_STEPS).max(1);
         let tool_names = self.tool_names();
         let mut tool_results = Vec::new();
+        let mut aggregated_usage = None;
 
         for step in 0..max_steps {
             let response = self
@@ -154,6 +155,7 @@ impl Agent {
                     request_context: request_context.clone(),
                 })
                 .await?;
+            accumulate_usage(&mut aggregated_usage, response.normalized_usage());
             let finish_reason = response.normalized_finish_reason();
             let tool_calls = response.normalized_tool_calls();
 
@@ -164,8 +166,11 @@ impl Agent {
                         self.id
                     )));
                 }
-                self.persist_response(&thread_id, &prompt, &response)
-                    .await?;
+                let mut response = response;
+                if let Some(usage) = aggregated_usage.clone() {
+                    response.usage = Some(usage);
+                }
+                self.persist_response(&thread_id, &prompt, &response).await?;
                 return Ok(self.to_agent_response(response, run_id, thread_id, tool_names));
             }
 
@@ -208,6 +213,7 @@ impl Agent {
                 let max_steps = max_steps.unwrap_or(DEFAULT_AGENT_MAX_STEPS).max(1);
                 let tool_names = agent.tool_names();
                 let mut tool_results = Vec::new();
+                let mut aggregated_usage = None;
 
                 for step in 0..max_steps {
                     let response = agent
@@ -224,6 +230,7 @@ impl Agent {
                             request_context: request_context.clone(),
                         })
                         .await?;
+                    accumulate_usage(&mut aggregated_usage, response.normalized_usage());
                     let finish_reason = response.normalized_finish_reason();
                     let tool_calls = response.normalized_tool_calls();
 
@@ -233,6 +240,10 @@ impl Agent {
                                 "agent '{}' received tool_call finish reason without tool payload",
                                 agent.id
                             )))?;
+                        }
+                        let mut response = response;
+                        if let Some(usage) = aggregated_usage.clone() {
+                            response.usage = Some(usage);
                         }
                         agent.persist_response(&thread_id, &prompt, &response).await?;
                         yield AgentStreamResponse {
@@ -489,6 +500,20 @@ impl Agent {
     }
 }
 
+fn accumulate_usage(total: &mut Option<UsageStats>, usage: Option<UsageStats>) {
+    let Some(usage) = usage else {
+        return;
+    };
+
+    match total {
+        Some(total) => {
+            total.prompt_tokens += usage.prompt_tokens;
+            total.completion_tokens += usage.completion_tokens;
+        }
+        None => *total = Some(usage),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, sync::Arc};
@@ -729,8 +754,8 @@ mod tests {
         assert_eq!(
             response.usage,
             Some(UsageStats {
-                prompt_tokens: 5,
-                completion_tokens: 2,
+                prompt_tokens: 8,
+                completion_tokens: 3,
             })
         );
 
@@ -773,7 +798,10 @@ mod tests {
                         text: String::new(),
                         data: Value::Null,
                         finish_reason: FinishReason::ToolCall,
-                        usage: None,
+                        usage: Some(UsageStats {
+                            prompt_tokens: 3,
+                            completion_tokens: 1,
+                        }),
                         tool_calls: vec![ModelToolCall {
                             id: "call-stream".into(),
                             name: "sum".into(),
@@ -784,7 +812,10 @@ mod tests {
                         text: "5".into(),
                         data: Value::Null,
                         finish_reason: FinishReason::Stop,
-                        usage: None,
+                        usage: Some(UsageStats {
+                            prompt_tokens: 5,
+                            completion_tokens: 2,
+                        }),
                         tool_calls: Vec::new(),
                     }),
                     other => panic!("unexpected model step {other}"),
@@ -842,7 +873,16 @@ mod tests {
         }
 
         match &events[2].as_ref().expect("done event").event {
-            ModelEvent::Done(response) => assert_eq!(response.text, "5"),
+            ModelEvent::Done(response) => {
+                assert_eq!(response.text, "5");
+                assert_eq!(
+                    response.usage,
+                    Some(UsageStats {
+                        prompt_tokens: 8,
+                        completion_tokens: 3,
+                    })
+                );
+            }
             other => panic!("expected done event, got {other:?}"),
         }
     }
