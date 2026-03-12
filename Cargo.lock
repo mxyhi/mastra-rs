@@ -1292,34 +1292,86 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 [[package]]
 name = "mastra-auth-auth0"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "jsonwebtoken",
+ "mastra-packages-auth",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "mastra-auth-better-auth"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "mastra-packages-auth",
+ "tokio",
+]
 
 [[package]]
 name = "mastra-auth-clerk"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "jsonwebtoken",
+ "mastra-packages-auth",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "mastra-auth-cloud"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "mastra-packages-auth",
+ "tokio",
+]
 
 [[package]]
 name = "mastra-auth-firebase"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "jsonwebtoken",
+ "mastra-packages-auth",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "mastra-auth-studio"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "mastra-packages-auth",
+ "tokio",
+]
 
 [[package]]
 name = "mastra-auth-supabase"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "mastra-packages-auth",
+ "tokio",
+]
 
 [[package]]
 name = "mastra-auth-workos"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "jsonwebtoken",
+ "mastra-packages-auth",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "mastra-cli"
@@ -1640,10 +1692,18 @@ version = "0.1.0"
 [[package]]
 name = "mastra-packages--external-types"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "mastra-packages--llm-recorder"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "mastra-packages--test-utils"
@@ -1730,6 +1790,10 @@ version = "0.1.0"
 [[package]]
 name = "mastra-packages-schema-compat"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "mastra-pubsub-google-cloud-pubsub"
@@ -1933,58 +1997,107 @@ version = "0.1.0"
 [[package]]
 name = "mastra-voice-azure"
 version = "0.1.0"
+dependencies = [
+ "mastra-voice-core",
+]
 
 [[package]]
 name = "mastra-voice-cloudflare"
 version = "0.1.0"
+dependencies = [
+ "mastra-voice-core",
+]
+
+[[package]]
+name = "mastra-voice-core"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "mastra-voice-deepgram"
 version = "0.1.0"
+dependencies = [
+ "mastra-voice-core",
+]
 
 [[package]]
 name = "mastra-voice-elevenlabs"
 version = "0.1.0"
+dependencies = [
+ "mastra-voice-core",
+]
 
 [[package]]
 name = "mastra-voice-gladia"
 version = "0.1.0"
+dependencies = [
+ "mastra-voice-core",
+]
 
 [[package]]
 name = "mastra-voice-google"
 version = "0.1.0"
+dependencies = [
+ "mastra-voice-core",
+]
 
 [[package]]
 name = "mastra-voice-google-gemini-live-api"
 version = "0.1.0"
+dependencies = [
+ "mastra-voice-core",
+]
 
 [[package]]
 name = "mastra-voice-modelslab"
 version = "0.1.0"
+dependencies = [
+ "mastra-voice-core",
+]
 
 [[package]]
 name = "mastra-voice-murf"
 version = "0.1.0"
+dependencies = [
+ "mastra-voice-core",
+]
 
 [[package]]
 name = "mastra-voice-openai"
 version = "0.1.0"
+dependencies = [
+ "mastra-voice-core",
+]
 
 [[package]]
 name = "mastra-voice-openai-realtime-api"
 version = "0.1.0"
+dependencies = [
+ "mastra-voice-core",
+]
 
 [[package]]
 name = "mastra-voice-playai"
 version = "0.1.0"
+dependencies = [
+ "mastra-voice-core",
+]
 
 [[package]]
 name = "mastra-voice-sarvam"
 version = "0.1.0"
+dependencies = [
+ "mastra-voice-core",
+]
 
 [[package]]
 name = "mastra-voice-speechify"
 version = "0.1.0"
+dependencies = [
+ "mastra-voice-core",
+]
 
 [[package]]
 name = "mastra-workflows--test-utils"
@@ -2002,28 +2115,65 @@ dependencies = [
 ]
 
 [[package]]
-name = "mastra-workspaces--test-utils"
-version = "0.1.0"
-
-[[package]]
 name = "mastra-workspaces-blaxel"
 version = "0.1.0"
+dependencies = [
+ "mastra-workspaces-core",
+ "mastra-workspaces-test-utils",
+ "serde_json",
+]
+
+[[package]]
+name = "mastra-workspaces-core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "thiserror",
+]
 
 [[package]]
 name = "mastra-workspaces-daytona"
 version = "0.1.0"
+dependencies = [
+ "mastra-workspaces-core",
+ "mastra-workspaces-test-utils",
+ "serde_json",
+]
 
 [[package]]
 name = "mastra-workspaces-e2b"
 version = "0.1.0"
+dependencies = [
+ "mastra-workspaces-core",
+ "mastra-workspaces-test-utils",
+ "serde_json",
+]
 
 [[package]]
 name = "mastra-workspaces-gcs"
 version = "0.1.0"
+dependencies = [
+ "mastra-workspaces-core",
+ "mastra-workspaces-test-utils",
+ "serde_json",
+]
 
 [[package]]
 name = "mastra-workspaces-s3"
 version = "0.1.0"
+dependencies = [
+ "mastra-workspaces-core",
+ "mastra-workspaces-test-utils",
+ "serde_json",
+]
+
+[[package]]
+name = "mastra-workspaces-test-utils"
+version = "0.1.0"
+dependencies = [
+ "mastra-workspaces-core",
+ "serde_json",
+]
 
 [[package]]
 name = "mastracode"

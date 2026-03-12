@@ -1,11 +1,23 @@
+#[path = "../../_test-utils/src/provider_support.rs"]
+mod provider_support;
+
 use async_trait::async_trait;
 use mastra_memory::{
     AppendMessageRequest, CloneThreadRequest, CreateThreadRequest, DeleteMessagesRequest,
     HistoryQuery, InMemoryMemoryStore, ListMessagesQuery, ListThreadsQuery, MemoryStore,
     MemoryStoreResult, Message, MessagePage, Thread, ThreadPage,
 };
+use provider_support::ensure_not_blank;
+pub use provider_support::{
+    ProviderBinding, ProviderBridge, ProviderCapability, ProviderConfigError, ProviderDescriptor,
+    ProviderKind,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+const PG_CAPABILITIES: &[ProviderCapability] = &[ProviderCapability::MemoryStore];
+const PG_DESCRIPTOR: ProviderDescriptor =
+    ProviderDescriptor::new("pg", ProviderKind::Storage, PG_CAPABILITIES);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PgStoreConfig {
@@ -19,6 +31,60 @@ impl Default for PgStoreConfig {
             connection_string: "postgres://localhost/mastra".to_string(),
             schema: None,
         }
+    }
+}
+
+impl PgStoreConfig {
+    pub fn validate(&self) -> Result<(), ProviderConfigError> {
+        ensure_not_blank(&self.connection_string, "connection_string")?;
+        if let Some(schema) = &self.schema {
+            ensure_not_blank(schema, "schema")?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PgProvider {
+    config: PgStoreConfig,
+}
+
+impl PgProvider {
+    pub fn new(config: PgStoreConfig) -> Result<Self, ProviderConfigError> {
+        config.validate()?;
+        Ok(Self { config })
+    }
+
+    pub fn config(&self) -> &PgStoreConfig {
+        &self.config
+    }
+
+    pub fn descriptor(&self) -> ProviderDescriptor {
+        PG_DESCRIPTOR
+    }
+
+    pub fn storage_bridge(&self) -> ProviderBridge {
+        let mut bridge = ProviderBridge::new(
+            PG_DESCRIPTOR,
+            self.config
+                .schema
+                .clone()
+                .unwrap_or_else(|| "public".to_string()),
+        )
+        .with_binding(ProviderBinding::plain(
+            "connection_string",
+            self.config.connection_string.clone(),
+        ));
+
+        if let Some(schema) = &self.config.schema {
+            bridge = bridge.with_binding(ProviderBinding::plain("schema", schema.clone()));
+        }
+
+        bridge
+    }
+
+    pub fn build_store(&self) -> PgStore {
+        PgStore::new(self.config.clone())
     }
 }
 
@@ -88,7 +154,40 @@ impl MemoryStore for PgStore {
 mod tests {
     use mastra_memory::{CloneThreadRequest, HistoryQuery, MessageRole};
 
-    use super::{CreateThreadRequest, MemoryStore, PgStore, PgStoreConfig};
+    use super::{
+        CreateThreadRequest, MemoryStore, PgProvider, PgStore, PgStoreConfig, ProviderCapability,
+        ProviderConfigError, ProviderKind,
+    };
+
+    #[test]
+    fn pg_provider_exposes_storage_bridge() {
+        let provider = PgProvider::new(PgStoreConfig {
+            connection_string: "postgres://localhost/test".into(),
+            schema: Some("mastra".into()),
+        })
+        .expect("pg config should be valid");
+
+        let descriptor = provider.descriptor();
+        let bridge = provider.storage_bridge();
+        let store = provider.build_store();
+
+        assert_eq!(descriptor.id, "pg");
+        assert_eq!(descriptor.kind, ProviderKind::Storage);
+        assert!(bridge.supports(ProviderCapability::MemoryStore));
+        assert_eq!(bridge.target, "mastra");
+        assert_eq!(store.config().schema.as_deref(), Some("mastra"));
+    }
+
+    #[test]
+    fn pg_provider_rejects_blank_connection_string() {
+        let error = PgProvider::new(PgStoreConfig {
+            connection_string: " ".into(),
+            schema: None,
+        })
+        .expect_err("blank connection string should be rejected");
+
+        assert_eq!(error, ProviderConfigError::EmptyField("connection_string"));
+    }
 
     #[tokio::test]
     async fn pg_store_uses_in_memory_backend_for_now() {

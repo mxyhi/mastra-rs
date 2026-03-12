@@ -1,36 +1,47 @@
 # Findings
 
-## 2026-03-12
+## Auth Cluster
 
-### Repo State
+- `packages/auth` 已经提供了足够的共享原语：`OidcJwtAuthenticator`、`SessionBackedAuthenticator`、`CallbackSessionAuthenticator`，所以 provider crate 最合理的实现方式是“薄 wrapper + provider-local config/trait”，而不是再发明一层 auth core。
+- OIDC 类 provider (`auth0`、`clerk`、`firebase`、`workos` bearer fallback) 统一围绕 `OidcConfiguration` 组装 issuer、audience、JWKS、algorithms 与 leeway。
+- Session 类 provider (`better-auth`、`supabase`) 统一通过 request cookie/bearer 解析后委托 provider-local client trait。
+- Callback 类 provider (`cloud`、`studio`) 统一复用 `CallbackSessionAuthenticator`，只保留 provider 特有的 callback 交换语义。
 
-- `HEAD` 当前在 `da50541 feat(runtime): add sdk auth deployer and observability primitives`。
-- 其后又出现未提交脏改动，集中在 `observability/{arize,braintrust,laminar,otel-bridge,otel-exporter}`。
+## Stores Cluster
 
-### Placeholder Inventory
+- `stores/_test-utils/src/provider_support.rs` 证明 stores rollout 的真实模式已经从占位 crate 收敛到统一的 provider descriptor/bridge 模型：
+  - `ProviderDescriptor` 描述 provider kind 与 capability。
+  - `ProviderBridge` 绑定 target 与 secrets，并支持 redaction。
+  - `ensure_not_blank` 负责通用配置校验。
+- 各个 stores crate 当前实现是“provider metadata + config validation + capability bridge”，不再是 `add/it_works` 模板。
 
-- `rg -l "fn add\\(|it_works\\(" --glob '!target'` 仍命中大批 crate，主要分布在：
-  - `auth/*`
-  - `stores/*`
-  - `voice/*`
-  - `workspaces/*`
-  - `packages/{agent-builder,codemod,editor,evals,fastembed,playground,playground-ui,schema-compat,mcp-docs-server,mcp-registry-registry,...}`
-  - `integrations/opencode`
-  - `explorations/longmemeval`
-  - 多个 `*_test-utils` / `_vendored` crate
+## Voice Cluster
 
-### Observability Cluster
+- `voice/core/src/lib.rs` 已形成统一的语音 provider 抽象：
+  - `VoiceProviderProfile` 定义 env vars、speech/listening models、speaker catalog、capabilities。
+  - `VoiceProviderAdapter` 负责把 speak/listen request 解析成 provider-specific resolved request。
+  - capability 校验、speaker 校验、transport 解析都已下沉到 core。
+- 各 voice provider crate 现在主要提供 provider profile 与 provider-specific defaults，而不是各自重复造校验逻辑。
 
-- 当前未提交的 observability crates 已具备真实实现，不再是 placeholder：
-  - `arize` / `laminar` 通过 `otel-exporter` 包装 OTLP request builder
-  - `braintrust` 直接构造 provider-specific ingest payload
-  - `otel-bridge` 暴露 `TraceBatch -> OTLP payload` bridge
-  - `otel-exporter` 提供通用 OTLP JSON exporter
-- targeted verification 已通过：
-  - `cargo test -p mastra-observability-arize -p mastra-observability-braintrust -p mastra-observability-laminar -p mastra-observability-otel-bridge -p mastra-observability-otel-exporter`
+## Workspaces Cluster
 
-### Reference Surface
+- `workspaces/core/src/lib.rs` 已形成统一的 workspace provider 抽象：
+  - `WorkspaceProviderKind` 区分 filesystem/blob store/sandbox。
+  - `ConfigField` 与 `ConfigFieldKind` 描述 schema。
+  - `WorkspaceProviderAdapter::validate_config` 负责默认值填充、required field 校验、类型校验与 enum 校验。
+- 各 workspace provider crate 现在主要声明 kinds、config fields 与 defaults，复用 core 的验证流程。
 
-- `.ref/mastra/observability/*` 显示 upstream 这些 provider 的核心语义确实围绕 tracing/exporter/provider config 展开，而不是复杂业务 runtime。
-- `.ref/mastra/auth/*` README 显示 upstream auth provider 包本质是对共享 auth system 的 provider-specific config / JWT verify / login handling 封装。
-- 这说明剩余 placeholder crate 大多可以按“共享 primitive + provider config/adapter + tests”的方式分群实现，而不需要每个 crate 从零单独设计。
+## Supporting Packages
+
+- `_llm-recorder` 已提供真实的 request hash / recording / contract validation 能力，不再是占位包。
+- `explorations/longmemeval` 已提供 memory config 枚举与评估汇总逻辑。
+- `_changeset-cli`、`_config`、`_external-types`、`_test-utils`、`_types-builder`、`agent-builder`、`mcp-docs-server`、`mcp-registry-registry`、`schema-compat`、`codemod`、`editor`、`evals`、`fastembed`、`playground`、`playground-ui`、`integrations/opencode`、`server-adapters/_test-utils`、`workflows/_test-utils` 均已替换为最小真实实现，并带单测。
+
+## Verification
+
+- auth 定向验证：
+  - `cargo test -p mastra-auth-auth0 -p mastra-auth-better-auth -p mastra-auth-clerk -p mastra-auth-cloud -p mastra-auth-firebase -p mastra-auth-studio -p mastra-auth-supabase -p mastra-auth-workos`
+- 全仓验证：
+  - `cargo fmt --all`
+  - `cargo test --workspace`
+- 结果：root workspace 全量测试与 doc-tests 全部通过。

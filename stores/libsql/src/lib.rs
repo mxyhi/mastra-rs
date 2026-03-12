@@ -1,3 +1,6 @@
+#[path = "../../_test-utils/src/provider_support.rs"]
+mod provider_support;
+
 use std::str::FromStr;
 
 use async_trait::async_trait;
@@ -8,6 +11,11 @@ use mastra_memory::{
     MemoryStoreResult, Message, MessagePage, MessageRole, Thread, ThreadPage,
     ensure_valid_pagination,
 };
+use provider_support::ensure_not_blank;
+pub use provider_support::{
+    ProviderBinding, ProviderBridge, ProviderCapability, ProviderConfigError, ProviderDescriptor,
+    ProviderKind,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     Row, SqlitePool,
@@ -15,6 +23,10 @@ use sqlx::{
 };
 use tokio::sync::OnceCell;
 use uuid::Uuid;
+
+const LIBSQL_CAPABILITIES: &[ProviderCapability] = &[ProviderCapability::MemoryStore];
+const LIBSQL_DESCRIPTOR: ProviderDescriptor =
+    ProviderDescriptor::new("libsql", ProviderKind::Storage, LIBSQL_CAPABILITIES);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LibSqlStoreConfig {
@@ -26,6 +38,41 @@ impl Default for LibSqlStoreConfig {
         Self {
             url: "file::memory:".to_string(),
         }
+    }
+}
+
+impl LibSqlStoreConfig {
+    pub fn validate(&self) -> Result<(), ProviderConfigError> {
+        ensure_not_blank(&self.url, "url")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibSqlProvider {
+    config: LibSqlStoreConfig,
+}
+
+impl LibSqlProvider {
+    pub fn new(config: LibSqlStoreConfig) -> Result<Self, ProviderConfigError> {
+        config.validate()?;
+        Ok(Self { config })
+    }
+
+    pub fn config(&self) -> &LibSqlStoreConfig {
+        &self.config
+    }
+
+    pub fn descriptor(&self) -> ProviderDescriptor {
+        LIBSQL_DESCRIPTOR
+    }
+
+    pub fn storage_bridge(&self) -> ProviderBridge {
+        ProviderBridge::new(LIBSQL_DESCRIPTOR, self.config.url.clone())
+            .with_binding(ProviderBinding::plain("url", self.config.url.clone()))
+    }
+
+    pub fn build_store(&self) -> LibSqlStore {
+        LibSqlStore::new(self.config.clone())
     }
 }
 
@@ -547,7 +594,39 @@ mod tests {
     use mastra_memory::{HistoryQuery, MessageRole, Pagination};
     use uuid::Uuid;
 
-    use super::{CreateThreadRequest, LibSqlStore, LibSqlStoreConfig, MemoryStore};
+    use super::{
+        CreateThreadRequest, LibSqlProvider, LibSqlStore, LibSqlStoreConfig, MemoryStore,
+        ProviderCapability, ProviderConfigError, ProviderKind,
+    };
+
+    #[test]
+    fn libsql_provider_exposes_storage_bridge() {
+        let provider = LibSqlProvider::new(LibSqlStoreConfig {
+            url: "file:provider-test?mode=memory&cache=shared".into(),
+        })
+        .expect("libsql config should be valid");
+
+        let descriptor = provider.descriptor();
+        let bridge = provider.storage_bridge();
+        let store = provider.build_store();
+
+        assert_eq!(descriptor.id, "libsql");
+        assert_eq!(descriptor.kind, ProviderKind::Storage);
+        assert!(bridge.supports(ProviderCapability::MemoryStore));
+        assert_eq!(bridge.target, "file:provider-test?mode=memory&cache=shared");
+        assert_eq!(
+            store.config().url,
+            "file:provider-test?mode=memory&cache=shared"
+        );
+    }
+
+    #[test]
+    fn libsql_provider_rejects_blank_url() {
+        let error = LibSqlProvider::new(LibSqlStoreConfig { url: " ".into() })
+            .expect_err("blank url should be rejected");
+
+        assert_eq!(error, ProviderConfigError::EmptyField("url"));
+    }
 
     #[tokio::test]
     async fn libsql_store_persists_messages_across_instances() {

@@ -1,8 +1,8 @@
 [package]
-name = "mastra-workspaces-test-utils"
+name = "mastra-workspaces-core"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-mastra-workspaces-core = { path = "../core" }
 serde_json.workspace = true
+thiserror.workspace = true

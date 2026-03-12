@@ -2,25 +2,51 @@
 
 ## 2026-03-12
 
-- 读取 `planning-with-files` skill，确认当前任务必须持续维护三份落盘文件。
-- 快速 memory pass 未命中 `mastra-rs` 相关条目，因此本轮主要基于当前仓库与 `.ref/mastra` 本地参考推进。
-- 盘点仓库状态：
-  - `git status --short`
-  - `git log --oneline --decorate -n 6`
-- 发现 `da50541` 之后出现新的未提交 observability 改动。
-- 扫描 placeholder crate：
-  - `rg -l "fn add\\(|it_works\\(" --glob '!target'`
-- 对照 `.ref/mastra` 的 observability / auth / stores / voice / workspaces / misc package 目录结构，确认剩余工作仍然很大，必须并行推进。
-- 已启动并行 agent 分工：
-  - Dirac -> `auth/**`
-  - Halley -> `stores/**`
-  - Wegener -> `voice/**` + `workspaces/**`
-  - Hilbert -> `misc packages` / `integrations` / `explorations` / test-utils
-- 主线程已验证 observability dirty cluster：
-  - `cargo test -p mastra-observability-arize -p mastra-observability-braintrust -p mastra-observability-laminar -p mastra-observability-otel-bridge -p mastra-observability-otel-exporter`
-  - 结果：全部通过
-- 下一步：
-  - 等待并整合各 agent 的 cluster 实现
-  - 中间穿插局部测试
-  - 最终执行 `cargo test --workspace`
-  - 形成自动 commit
+- 读取 `planning-with-files` skill，并接管上一轮未完成的 `mastra-rs` rollout。
+- 审计工作树，确认：
+  - `auth/**` 半成品实现未闭环。
+  - `stores/**`、`voice/**`、`workspaces/**`、多个 `packages/**` 已有大面积未提交改动。
+  - root `task_plan.md`、`findings.md`、`progress.md` 被其它任务内容污染。
+- 并行分工：
+  - Halley 负责 stores cluster。
+  - Wegener 负责 voice/workspaces cluster。
+  - Hilbert 负责 misc packages/test-utils cluster。
+  - 主线程负责 auth、planning files、集成与 commit。
+
+## Auth Milestone
+
+- 修复 `auth/clerk/Cargo.toml` 与 `auth/firebase/Cargo.toml` 的重复 `[dev-dependencies]`。
+- 将八个 auth provider crate 统一到：
+  - `Mastra*Options` builder
+  - provider-local client traits
+  - `packages/auth` 原语复用
+  - integration tests 覆盖 env/config/cookie/bearer/callback/JWKS 行为
+- 运行：
+  - `cargo test -p mastra-auth-auth0 -p mastra-auth-better-auth -p mastra-auth-clerk -p mastra-auth-cloud -p mastra-auth-firebase -p mastra-auth-studio -p mastra-auth-supabase -p mastra-auth-workos`
+- 生成提交：
+  - `67dfacd feat(auth): add provider wrappers for auth crates`
+
+## Cluster Integration
+
+- 回收 agent 结果并核对 stores / packages cluster 的实现方向。
+- 识别到 voice/workspaces 与若干 supporting packages 已在当前树完成真实实现，直接以 root workspace 回归为准，不再重复拆分验证。
+- 代表性实现抽样确认：
+  - `stores/_test-utils/src/provider_support.rs`
+  - `voice/core/src/lib.rs`
+  - `workspaces/core/src/lib.rs`
+  - `packages/_llm-recorder/src/lib.rs`
+  - `explorations/longmemeval/src/lib.rs`
+
+## Final Verification
+
+- 运行：
+  - `cargo fmt --all`
+  - `cargo test --workspace`
+- 结果：
+  - root workspace 编译通过
+  - 所有单元测试、integration tests、doc-tests 通过
+  - observability/auth/stores/voice/workspaces/supporting packages 全部纳入同一回归闭环
+
+## Pending
+
+- 生成最终 integration commit。
