@@ -1,23 +1,32 @@
 use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 
-use async_trait::async_trait;
-use chrono::Utc;
+use clap::ValueEnum;
 use mastra_core::{
-    Agent, AgentConfig, AgentGenerateRequest, CreateThreadRequest, MemoryConfig, MemoryEngine,
-    MemoryMessage, MemoryRecallRequest, RequestContext, StaticModel, Thread,
+    Agent, AgentConfig, AgentGenerateRequest, MemoryConfig, MemoryEngine, RequestContext,
+    StaticModel,
 };
+use mastra_memory::{ListThreadsQuery, Memory};
+use mastra_store_libsql::{LibSqlStore, LibSqlStoreConfig};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputFormat {
+    Default,
+    Json,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunOptions {
     pub prompt: String,
     pub thread_id: Option<String>,
+    pub continue_latest: bool,
     pub resource_id: Option<String>,
-    pub json: bool,
+    pub format: OutputFormat,
+    pub storage_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,91 +36,37 @@ pub struct RunOutput {
     pub resource_id: Option<String>,
 }
 
-#[derive(Default)]
-struct HeadlessMemory {
-    threads: Mutex<HashMap<String, Thread>>,
-    messages: Mutex<HashMap<String, Vec<MemoryMessage>>>,
+pub fn default_storage_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".mastracode")
+        .join("memory.db")
 }
 
-#[async_trait]
-impl MemoryEngine for HeadlessMemory {
-    async fn create_thread(&self, request: CreateThreadRequest) -> mastra_core::Result<Thread> {
-        let thread = Thread {
-            id: request.id.unwrap_or_else(|| Uuid::now_v7().to_string()),
-            resource_id: request.resource_id,
-            title: request.title,
-            created_at: Utc::now(),
-            metadata: request.metadata,
-        };
-        self.threads
-            .lock()
-            .expect("thread mutex")
-            .insert(thread.id.clone(), thread.clone());
-        self.messages
-            .lock()
-            .expect("message mutex")
-            .entry(thread.id.clone())
-            .or_default();
-        Ok(thread)
+fn prepare_storage_path(storage_path: &Path) -> mastra_core::Result<()> {
+    if let Some(parent) = storage_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            mastra_core::MastraError::storage(format!(
+                "create mastracode storage directory '{}': {error}",
+                parent.display()
+            ))
+        })?;
     }
 
-    async fn get_thread(&self, thread_id: &str) -> mastra_core::Result<Option<Thread>> {
-        Ok(self
-            .threads
-            .lock()
-            .expect("thread mutex")
-            .get(thread_id)
-            .cloned())
-    }
+    Ok(())
+}
 
-    async fn list_threads(&self, resource_id: Option<&str>) -> mastra_core::Result<Vec<Thread>> {
-        let mut threads = self
-            .threads
-            .lock()
-            .expect("thread mutex")
-            .values()
-            .filter(|thread| {
-                resource_id
-                    .map(|expected| thread.resource_id.as_deref() == Some(expected))
-                    .unwrap_or(true)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        threads.sort_by(|left, right| left.created_at.cmp(&right.created_at));
-        Ok(threads)
-    }
+fn storage_url(storage_path: &Path) -> String {
+    format!("file:{}", storage_path.display())
+}
 
-    async fn append_messages(
-        &self,
-        thread_id: &str,
-        messages: Vec<MemoryMessage>,
-    ) -> mastra_core::Result<()> {
-        self.messages
-            .lock()
-            .expect("message mutex")
-            .entry(thread_id.to_owned())
-            .or_default()
-            .extend(messages);
-        Ok(())
-    }
+fn open_memory(storage_path: &Path) -> mastra_core::Result<Memory> {
+    prepare_storage_path(storage_path)?;
 
-    async fn list_messages(
-        &self,
-        request: MemoryRecallRequest,
-    ) -> mastra_core::Result<Vec<MemoryMessage>> {
-        let mut messages = self
-            .messages
-            .lock()
-            .expect("message mutex")
-            .get(&request.thread_id)
-            .cloned()
-            .unwrap_or_default();
-        if let Some(limit) = request.limit {
-            let start = messages.len().saturating_sub(limit);
-            messages = messages[start..].to_vec();
-        }
-        Ok(messages)
-    }
+    Ok(Memory::new(LibSqlStore::new(LibSqlStoreConfig {
+        url: storage_url(storage_path),
+    })))
 }
 
 fn build_agent(memory: Arc<dyn MemoryEngine>) -> Agent {
@@ -119,7 +74,7 @@ fn build_agent(memory: Arc<dyn MemoryEngine>) -> Agent {
         id: "code-agent".to_owned(),
         name: "Code Agent".to_owned(),
         instructions: "You are the Rust port of MastraCode.".to_owned(),
-        description: Some("Minimal headless MastraCode runner".to_owned()),
+        description: Some("Persistent headless MastraCode runner".to_owned()),
         model: Arc::new(StaticModel::echo()),
         tools: Vec::new(),
         memory: Some(memory),
@@ -127,19 +82,42 @@ fn build_agent(memory: Arc<dyn MemoryEngine>) -> Agent {
     })
 }
 
+async fn resolve_thread_id(
+    memory: &Memory,
+    requested_thread_id: Option<String>,
+    continue_latest: bool,
+) -> mastra_core::Result<Option<String>> {
+    if requested_thread_id.is_some() {
+        return Ok(requested_thread_id);
+    }
+
+    if !continue_latest {
+        return Ok(None);
+    }
+
+    let threads = memory
+        .list_threads(ListThreadsQuery::default())
+        .await
+        .map_err(|error| mastra_core::MastraError::storage(error.to_string()))?;
+
+    Ok(threads.items.first().map(|thread| thread.id.to_string()))
+}
+
 pub async fn run_headless(options: RunOptions) -> mastra_core::Result<RunOutput> {
-    let memory: Arc<dyn MemoryEngine> = Arc::new(HeadlessMemory::default());
-    let agent = build_agent(Arc::clone(&memory));
+    let storage_path = options.storage_path.unwrap_or_else(default_storage_path);
+    let memory = Arc::new(open_memory(&storage_path)?);
+    let thread_id =
+        resolve_thread_id(&memory, options.thread_id.clone(), options.continue_latest).await?;
     let request_context = options
         .resource_id
         .clone()
         .map_or_else(RequestContext::new, |resource_id| {
             RequestContext::new().with_resource_id(resource_id)
         });
-    let response = agent
+    let response = build_agent(memory)
         .generate(AgentGenerateRequest {
             prompt: options.prompt,
-            thread_id: options.thread_id,
+            thread_id,
             resource_id: options.resource_id.clone(),
             run_id: None,
             max_steps: None,
@@ -154,45 +132,98 @@ pub async fn run_headless(options: RunOptions) -> mastra_core::Result<RunOutput>
     })
 }
 
-pub fn render_output(output: &RunOutput, json: bool) -> String {
-    if json {
-        serde_json::to_string_pretty(output).expect("serialize output")
-    } else {
-        let mut lines = vec![format!("text: {}", output.text)];
-        if let Some(thread_id) = &output.thread_id {
-            lines.push(format!("thread_id: {thread_id}"));
+pub fn render_output(output: &RunOutput, format: OutputFormat) -> String {
+    match format {
+        OutputFormat::Json => serde_json::to_string_pretty(output).expect("serialize output"),
+        OutputFormat::Default => {
+            let mut lines = vec![format!("text: {}", output.text)];
+            if let Some(thread_id) = &output.thread_id {
+                lines.push(format!("thread_id: {thread_id}"));
+            }
+            if let Some(resource_id) = &output.resource_id {
+                lines.push(format!("resource_id: {resource_id}"));
+            }
+            lines.join("\n")
         }
-        if let Some(resource_id) = &output.resource_id {
-            lines.push(format!("resource_id: {resource_id}"));
-        }
-        lines.join("\n")
     }
 }
 
 pub fn ready_message() -> &'static str {
-    "mastracode headless runner is available via `mastracode run --prompt <text>`"
+    "mastracode headless runner is available via `mastracode run --prompt <text> --continue --format json`"
 }
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
+    use mastra_memory::MessageRole;
+    use tempfile::tempdir;
+    use uuid::Uuid;
 
-    use super::{RunOptions, RunOutput, ready_message, render_output, run_headless};
+    use super::{
+        ListThreadsQuery, OutputFormat, RunOptions, RunOutput, default_storage_path, open_memory,
+        ready_message, render_output, run_headless,
+    };
+    use mastra_memory::HistoryQuery;
 
     #[tokio::test]
-    async fn run_headless_uses_agent_runtime_and_returns_thread() {
-        let output = run_headless(RunOptions {
+    async fn run_headless_uses_persistent_memory_and_continue_reuses_latest_thread() {
+        let temp = tempdir().expect("tempdir");
+        let storage_path = temp.path().join("mastracode.db");
+
+        let first = run_headless(RunOptions {
             prompt: "hello rust".to_owned(),
             thread_id: None,
+            continue_latest: false,
             resource_id: Some("workspace-1".to_owned()),
-            json: false,
+            format: OutputFormat::Default,
+            storage_path: Some(storage_path.clone()),
         })
         .await
-        .expect("headless run should succeed");
+        .expect("first headless run should succeed");
 
-        assert_eq!(output.text, "hello rust");
-        assert_eq!(output.resource_id.as_deref(), Some("workspace-1"));
-        assert!(output.thread_id.is_some());
+        let second = run_headless(RunOptions {
+            prompt: "continue please".to_owned(),
+            thread_id: None,
+            continue_latest: true,
+            resource_id: Some("workspace-1".to_owned()),
+            format: OutputFormat::Default,
+            storage_path: Some(storage_path.clone()),
+        })
+        .await
+        .expect("second headless run should succeed");
+
+        assert_eq!(first.resource_id.as_deref(), Some("workspace-1"));
+        assert_eq!(second.resource_id.as_deref(), Some("workspace-1"));
+        assert_eq!(second.thread_id, first.thread_id);
+
+        let memory = open_memory(&storage_path).expect("persistent memory should open");
+        let threads = memory
+            .list_threads(ListThreadsQuery::default())
+            .await
+            .expect("threads should load");
+        assert_eq!(threads.items.len(), 1);
+
+        let thread_id = Uuid::parse_str(
+            first
+                .thread_id
+                .as_deref()
+                .expect("thread id should be persisted"),
+        )
+        .expect("uuid");
+        let history = memory
+            .history(HistoryQuery {
+                thread_id,
+                limit: None,
+            })
+            .await
+            .expect("history should load");
+
+        assert_eq!(history.len(), 4);
+        assert_eq!(history[0].role, MessageRole::User);
+        assert_eq!(history[0].text, "hello rust");
+        assert_eq!(history[1].role, MessageRole::Assistant);
+        assert_eq!(history[2].role, MessageRole::User);
+        assert_eq!(history[2].text, "continue please");
+        assert_eq!(history[3].role, MessageRole::Assistant);
     }
 
     #[test]
@@ -203,17 +234,25 @@ mod tests {
                 thread_id: Some("thread-1".to_owned()),
                 resource_id: Some("resource-1".to_owned()),
             },
-            true,
+            OutputFormat::Json,
         );
 
-        let payload: Value = serde_json::from_str(&rendered).expect("json output");
+        let payload: serde_json::Value = serde_json::from_str(&rendered).expect("json output");
         assert_eq!(payload["text"], "hello");
         assert_eq!(payload["thread_id"], "thread-1");
         assert_eq!(payload["resource_id"], "resource-1");
     }
 
     #[test]
-    fn ready_message_points_to_headless_command() {
-        assert!(ready_message().contains("mastracode run --prompt"));
+    fn ready_message_points_to_extended_headless_flags() {
+        assert!(ready_message().contains("--continue"));
+        assert!(ready_message().contains("--format json"));
+    }
+
+    #[test]
+    fn default_storage_path_uses_mastracode_directory() {
+        let path = default_storage_path();
+        assert!(path.to_string_lossy().contains(".mastracode"));
+        assert!(path.to_string_lossy().ends_with("memory.db"));
     }
 }

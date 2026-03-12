@@ -2186,12 +2186,13 @@ dependencies = [
 name = "mastracode"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "chrono",
  "clap",
  "mastra-core",
+ "mastra-memory",
+ "mastra-store-libsql",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
 ]
