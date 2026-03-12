@@ -132,6 +132,22 @@ impl RuntimeRegistry {
             })
     }
 
+    pub fn find_default_memory(&self) -> ServerResult<Arc<dyn MemoryEngine>> {
+        let memories = self.memory.read();
+        if let Some(memory) = memories.get("default").cloned() {
+            return Ok(memory);
+        }
+
+        if memories.len() == 1 {
+            return Ok(memories.values().next().cloned().expect("single memory"));
+        }
+
+        Err(ServerError::BadRequest(
+            "default memory is not available; register a `default` memory or expose a single memory instance"
+                .to_owned(),
+        ))
+    }
+
     pub fn find_tool(&self, tool_id: &str) -> ServerResult<Tool> {
         if let Some(tool) = self.tools.read().get(tool_id).cloned() {
             return Ok(tool);
@@ -255,6 +271,20 @@ impl RuntimeRegistry {
         }
 
         Ok(run)
+    }
+
+    pub fn list_workflow_runs(&self, workflow_id: &str) -> ServerResult<Vec<WorkflowRunRecord>> {
+        self.ensure_workflow_exists(workflow_id)?;
+
+        let mut runs = self
+            .workflow_runs
+            .read()
+            .values()
+            .filter(|run| run.workflow_id == workflow_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        runs.sort_by_key(|run| run.run_id);
+        Ok(runs)
     }
 
     fn ensure_workflow_exists(&self, workflow_id: &str) -> ServerResult<()> {

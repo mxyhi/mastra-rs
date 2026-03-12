@@ -7,7 +7,11 @@ publish.workspace = true
 
 [dependencies]
 clap.workspace = true
+create-mastra = { path = "../create-mastra" }
 mastra-core = { path = "../core" }
 mastra-loggers = { path = "../loggers" }
 mastra-server = { path = "../server" }
 tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3.20.0"

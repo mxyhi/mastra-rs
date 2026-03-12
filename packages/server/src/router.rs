@@ -20,10 +20,10 @@ use crate::{
         AgentDetailResponse, AppendMemoryMessagesRequest, AppendMemoryMessagesResponse,
         CreateMemoryThreadRequest, CreateMemoryThreadResponse, CreateWorkflowRunRequest,
         ErrorResponse, ExecuteToolRequest, ExecuteToolResponse, GenerateRequest,
-        GenerateStreamEvent, ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse,
-        ListThreadsResponse, ListToolsResponse, ListWorkflowsResponse, RouteDescription,
-        StartWorkflowRunRequest, StartWorkflowRunResponse, WorkflowDetailResponse,
-        WorkflowRunRecord,
+        GenerateStreamEvent, GetMemoryThreadResponse, ListAgentsResponse, ListMemoriesResponse,
+        ListMemoryMessagesResponse, ListThreadsResponse, ListToolsResponse,
+        ListWorkflowRunsResponse, ListWorkflowsResponse, RouteDescription, StartWorkflowRunRequest,
+        StartWorkflowRunResponse, WorkflowDetailResponse, WorkflowRunRecord,
     },
     error::{ServerError, ServerResult},
     registry::RuntimeRegistry,
@@ -115,8 +115,24 @@ impl MastraServer {
             .route("/tools/{tool_id}", get(get_tool))
             .route("/tools/{tool_id}/execute", post(execute_tool))
             .route(
+                "/memory/threads",
+                get(list_default_memory_threads).post(create_default_memory_thread),
+            )
+            .route(
+                "/memory/threads/{thread_id}",
+                get(get_default_memory_thread),
+            )
+            .route(
+                "/memory/threads/{thread_id}/messages",
+                post(append_default_memory_messages).get(list_default_memory_messages),
+            )
+            .route(
                 "/memory/{memory_id}/threads",
                 get(list_memory_threads).post(create_memory_thread),
+            )
+            .route(
+                "/memory/{memory_id}/threads/{thread_id}",
+                get(get_memory_thread),
             )
             .route(
                 "/memory/{memory_id}/threads/{thread_id}/messages",
@@ -132,6 +148,7 @@ impl MastraServer {
                 "/workflows/{workflow_id}/start-async",
                 post(start_workflow_async),
             )
+            .route("/workflows/{workflow_id}/runs", get(list_workflow_runs))
             .route(
                 "/workflows/{workflow_id}/runs/{run_id}",
                 get(get_workflow_run),
@@ -194,11 +211,29 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
             "/tools/{tool_id}/execute",
             "Execute a registered tool",
         ),
+        ("GET", "/memory/threads", "List memory threads"),
+        ("POST", "/memory/threads", "Create a memory thread"),
+        ("GET", "/memory/threads/{thread_id}", "Get a memory thread"),
+        (
+            "GET",
+            "/memory/threads/{thread_id}/messages",
+            "List messages for a memory thread",
+        ),
+        (
+            "POST",
+            "/memory/threads/{thread_id}/messages",
+            "Append messages to a memory thread",
+        ),
         ("GET", "/memory/{memory_id}/threads", "List memory threads"),
         (
             "POST",
             "/memory/{memory_id}/threads",
             "Create a memory thread",
+        ),
+        (
+            "GET",
+            "/memory/{memory_id}/threads/{thread_id}",
+            "Get a memory thread",
         ),
         (
             "GET",
@@ -225,6 +260,11 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
             "POST",
             "/workflows/{workflow_id}/start-async",
             "Execute a workflow run immediately",
+        ),
+        (
+            "GET",
+            "/workflows/{workflow_id}/runs",
+            "List workflow run records",
         ),
         (
             "GET",
@@ -395,11 +435,25 @@ async fn execute_tool(
 }
 
 #[instrument(skip(state))]
+async fn list_default_memory_threads(
+    State(state): State<AppState>,
+) -> ServerResult<Json<ListThreadsResponse>> {
+    let memory = state.registry.find_default_memory()?;
+    list_memory_threads_for(memory).await
+}
+
+#[instrument(skip(state))]
 async fn list_memory_threads(
     State(state): State<AppState>,
     Path(memory_id): Path<String>,
 ) -> ServerResult<Json<ListThreadsResponse>> {
     let memory = state.registry.find_memory(&memory_id)?;
+    list_memory_threads_for(memory).await
+}
+
+async fn list_memory_threads_for(
+    memory: Arc<dyn MemoryEngine>,
+) -> ServerResult<Json<ListThreadsResponse>> {
     let threads = memory
         .list_threads(None)
         .await
@@ -409,12 +463,28 @@ async fn list_memory_threads(
 }
 
 #[instrument(skip(state, request))]
+async fn create_default_memory_thread(
+    State(state): State<AppState>,
+    Json(request): Json<CreateMemoryThreadRequest>,
+) -> ServerResult<Json<CreateMemoryThreadResponse>> {
+    let memory = state.registry.find_default_memory()?;
+    create_memory_thread_for(memory, request).await
+}
+
+#[instrument(skip(state, request))]
 async fn create_memory_thread(
     State(state): State<AppState>,
     Path(memory_id): Path<String>,
     Json(request): Json<CreateMemoryThreadRequest>,
 ) -> ServerResult<Json<CreateMemoryThreadResponse>> {
     let memory = state.registry.find_memory(&memory_id)?;
+    create_memory_thread_for(memory, request).await
+}
+
+async fn create_memory_thread_for(
+    memory: Arc<dyn MemoryEngine>,
+    request: CreateMemoryThreadRequest,
+) -> ServerResult<Json<CreateMemoryThreadResponse>> {
     let thread = memory
         .create_thread(CreateThreadRequest {
             id: request.id,
@@ -428,6 +498,50 @@ async fn create_memory_thread(
     Ok(Json(CreateMemoryThreadResponse { thread }))
 }
 
+#[instrument(skip(state))]
+async fn get_default_memory_thread(
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
+) -> ServerResult<Json<GetMemoryThreadResponse>> {
+    let memory = state.registry.find_default_memory()?;
+    get_memory_thread_for(memory, thread_id).await
+}
+
+#[instrument(skip(state))]
+async fn get_memory_thread(
+    State(state): State<AppState>,
+    Path((memory_id, thread_id)): Path<(String, String)>,
+) -> ServerResult<Json<GetMemoryThreadResponse>> {
+    let memory = state.registry.find_memory(&memory_id)?;
+    get_memory_thread_for(memory, thread_id).await
+}
+
+async fn get_memory_thread_for(
+    memory: Arc<dyn MemoryEngine>,
+    thread_id: String,
+) -> ServerResult<Json<GetMemoryThreadResponse>> {
+    let thread = memory
+        .get_thread(&thread_id)
+        .await
+        .map_err(ServerError::internal)?
+        .ok_or_else(|| ServerError::NotFound {
+            resource: "memory thread",
+            id: thread_id,
+        })?;
+
+    Ok(Json(GetMemoryThreadResponse { thread }))
+}
+
+#[instrument(skip(state, request))]
+async fn append_default_memory_messages(
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
+    Json(request): Json<AppendMemoryMessagesRequest>,
+) -> ServerResult<Json<AppendMemoryMessagesResponse>> {
+    let memory = state.registry.find_default_memory()?;
+    append_memory_messages_for(memory, thread_id, request).await
+}
+
 #[instrument(skip(state, request))]
 async fn append_memory_messages(
     State(state): State<AppState>,
@@ -435,6 +549,14 @@ async fn append_memory_messages(
     Json(request): Json<AppendMemoryMessagesRequest>,
 ) -> ServerResult<Json<AppendMemoryMessagesResponse>> {
     let memory = state.registry.find_memory(&memory_id)?;
+    append_memory_messages_for(memory, thread_id, request).await
+}
+
+async fn append_memory_messages_for(
+    memory: Arc<dyn MemoryEngine>,
+    thread_id: String,
+    request: AppendMemoryMessagesRequest,
+) -> ServerResult<Json<AppendMemoryMessagesResponse>> {
     let messages = request
         .messages
         .into_iter()
@@ -461,11 +583,27 @@ async fn append_memory_messages(
 }
 
 #[instrument(skip(state))]
+async fn list_default_memory_messages(
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
+) -> ServerResult<Json<ListMemoryMessagesResponse>> {
+    let memory = state.registry.find_default_memory()?;
+    list_memory_messages_for(memory, thread_id).await
+}
+
+#[instrument(skip(state))]
 async fn list_memory_messages(
     State(state): State<AppState>,
     Path((memory_id, thread_id)): Path<(String, String)>,
 ) -> ServerResult<Json<ListMemoryMessagesResponse>> {
     let memory = state.registry.find_memory(&memory_id)?;
+    list_memory_messages_for(memory, thread_id).await
+}
+
+async fn list_memory_messages_for(
+    memory: Arc<dyn MemoryEngine>,
+    thread_id: String,
+) -> ServerResult<Json<ListMemoryMessagesResponse>> {
     let messages = memory
         .list_messages(MemoryRecallRequest {
             thread_id,
@@ -521,6 +659,15 @@ async fn start_workflow_async(
 }
 
 #[instrument(skip(state))]
+async fn list_workflow_runs(
+    State(state): State<AppState>,
+    Path(workflow_id): Path<String>,
+) -> ServerResult<Json<ListWorkflowRunsResponse>> {
+    let runs = state.registry.list_workflow_runs(&workflow_id)?;
+    Ok(Json(ListWorkflowRunsResponse { runs }))
+}
+
+#[instrument(skip(state))]
 async fn get_workflow_run(
     State(state): State<AppState>,
     Path((workflow_id, run_id)): Path<(String, String)>,
@@ -549,21 +696,24 @@ fn encode_stream_event(event: GenerateStreamEvent) -> Event {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
 
     use async_trait::async_trait;
     use axum::{
         body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
+    use chrono::Utc;
     use futures::{StreamExt, stream::BoxStream};
     use mastra_core::{
-        Agent, AgentConfig, FinishReason as CoreFinishReason, MemoryConfig, ModelRequest,
-        ModelResponse, ModelToolCall, StaticModel, Tool,
+        Agent, AgentConfig, CreateThreadRequest, FinishReason as CoreFinishReason, MemoryConfig,
+        MemoryEngine, MemoryMessage, MemoryRecallRequest, ModelRequest, ModelResponse,
+        ModelToolCall, StaticModel, Thread, Tool,
     };
     use parking_lot::RwLock;
     use serde_json::{Value, json};
     use tower::ServiceExt;
+    use uuid::Uuid;
 
     use crate::{
         contracts::{
@@ -672,6 +822,81 @@ mod tests {
                 "accepted": true,
                 "input": request.input_data,
             }))
+        }
+    }
+
+    #[derive(Default)]
+    struct TestMemory {
+        threads: RwLock<HashMap<String, Thread>>,
+        messages: RwLock<HashMap<String, Vec<MemoryMessage>>>,
+    }
+
+    #[async_trait]
+    impl MemoryEngine for TestMemory {
+        async fn create_thread(&self, request: CreateThreadRequest) -> mastra_core::Result<Thread> {
+            let thread = Thread {
+                id: request.id.unwrap_or_else(|| Uuid::now_v7().to_string()),
+                resource_id: request.resource_id,
+                title: request.title,
+                created_at: Utc::now(),
+                metadata: request.metadata,
+            };
+            self.threads
+                .write()
+                .insert(thread.id.clone(), thread.clone());
+            self.messages.write().entry(thread.id.clone()).or_default();
+            Ok(thread)
+        }
+
+        async fn get_thread(&self, thread_id: &str) -> mastra_core::Result<Option<Thread>> {
+            Ok(self.threads.read().get(thread_id).cloned())
+        }
+
+        async fn list_threads(
+            &self,
+            resource_id: Option<&str>,
+        ) -> mastra_core::Result<Vec<Thread>> {
+            Ok(self
+                .threads
+                .read()
+                .values()
+                .filter(|thread| {
+                    resource_id
+                        .map(|expected| thread.resource_id.as_deref() == Some(expected))
+                        .unwrap_or(true)
+                })
+                .cloned()
+                .collect())
+        }
+
+        async fn append_messages(
+            &self,
+            thread_id: &str,
+            messages: Vec<MemoryMessage>,
+        ) -> mastra_core::Result<()> {
+            self.messages
+                .write()
+                .entry(thread_id.to_owned())
+                .or_default()
+                .extend(messages);
+            Ok(())
+        }
+
+        async fn list_messages(
+            &self,
+            request: MemoryRecallRequest,
+        ) -> mastra_core::Result<Vec<MemoryMessage>> {
+            let mut messages = self
+                .messages
+                .read()
+                .get(&request.thread_id)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(limit) = request.limit {
+                let start = messages.len().saturating_sub(limit);
+                messages = messages[start..].to_vec();
+            }
+            Ok(messages)
         }
     }
 
@@ -1073,5 +1298,146 @@ mod tests {
             .unwrap();
 
         assert_eq!(fetch_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn exposes_default_memory_routes_with_official_resource_id_shape() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_memory("default", Arc::new(TestMemory::default()));
+        let router = server.into_router();
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/threads")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-1",
+                            "title": "Default thread",
+                            "metadata": { "source": "test" },
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let create_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let create_payload: Value = serde_json::from_slice(&create_body).unwrap();
+        let thread_id = create_payload["thread"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(create_payload["thread"]["resource_id"], "resource-1");
+
+        let get_thread_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/memory/threads/{thread_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(get_thread_response.status(), StatusCode::OK);
+
+        let append_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/memory/threads/{thread_id}/messages"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": "hello from default memory",
+                                }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(append_response.status(), StatusCode::OK);
+
+        let list_messages_response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/memory/threads/{thread_id}/messages"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(list_messages_response.status(), StatusCode::OK);
+        let list_messages_body = to_bytes(list_messages_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_messages_payload: Value = serde_json::from_slice(&list_messages_body).unwrap();
+        assert_eq!(
+            list_messages_payload["messages"][0]["content"],
+            "hello from default memory"
+        );
+    }
+
+    #[tokio::test]
+    async fn lists_workflow_runs_after_starting_a_workflow_with_official_field_names() {
+        let registry = RuntimeRegistry::new();
+        registry.register_workflow(JsonWorkflow);
+        let router = MastraServer::new(registry).into_router();
+
+        let start_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/demo/start-async")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-9",
+                            "inputData": { "topic": "rust" },
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(start_response.status(), StatusCode::OK);
+
+        let list_response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/workflows/demo/runs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_payload: Value = serde_json::from_slice(&list_body).unwrap();
+        assert_eq!(list_payload["runs"].as_array().unwrap().len(), 1);
+        assert_eq!(list_payload["runs"][0]["workflow_id"], "demo");
+        assert_eq!(list_payload["runs"][0]["resource_id"], "resource-9");
+        assert_eq!(list_payload["runs"][0]["status"], "success");
     }
 }

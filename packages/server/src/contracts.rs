@@ -123,14 +123,19 @@ pub enum FinishReason {
 pub struct GenerateRequest {
     pub messages: AgentMessages,
     #[serde(default)]
+    #[serde(alias = "resourceId")]
     pub resource_id: Option<String>,
     #[serde(default)]
+    #[serde(alias = "threadId")]
     pub thread_id: Option<String>,
     #[serde(default)]
+    #[serde(alias = "runId")]
     pub run_id: Option<String>,
     #[serde(default)]
+    #[serde(alias = "maxSteps")]
     pub max_steps: Option<u32>,
     #[serde(default)]
+    #[serde(alias = "requestContext")]
     pub request_context: IndexMap<String, Value>,
 }
 
@@ -216,20 +221,26 @@ impl GenerateStreamEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateWorkflowRunRequest {
     #[serde(default)]
+    #[serde(alias = "resourceId")]
     pub resource_id: Option<String>,
     #[serde(default)]
+    #[serde(alias = "inputData")]
     pub input_data: Option<Value>,
     #[serde(default)]
+    #[serde(alias = "requestContext")]
     pub request_context: IndexMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StartWorkflowRunRequest {
     #[serde(default)]
+    #[serde(alias = "resourceId")]
     pub resource_id: Option<String>,
     #[serde(default)]
+    #[serde(alias = "inputData")]
     pub input_data: Option<Value>,
     #[serde(default)]
+    #[serde(alias = "requestContext")]
     pub request_context: IndexMap<String, Value>,
 }
 
@@ -301,6 +312,11 @@ pub struct StartWorkflowRunResponse {
     pub run: WorkflowRunRecord,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ListWorkflowRunsResponse {
+    pub runs: Vec<WorkflowRunRecord>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ErrorResponse {
     pub error: String,
@@ -318,6 +334,7 @@ pub struct CreateMemoryThreadRequest {
     #[serde(default)]
     pub id: Option<String>,
     #[serde(default)]
+    #[serde(alias = "resourceId")]
     pub resource_id: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
@@ -327,6 +344,11 @@ pub struct CreateMemoryThreadRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CreateMemoryThreadResponse {
+    pub thread: Thread,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GetMemoryThreadResponse {
     pub thread: Thread,
 }
 
@@ -377,4 +399,48 @@ pub struct AppendMemoryMessagesResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ListMemoryMessagesResponse {
     pub messages: Vec<MemoryMessage>,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{GenerateRequest, StartWorkflowRunRequest};
+
+    #[test]
+    fn generate_request_deserializes_official_camel_case_fields() {
+        let request: GenerateRequest = serde_json::from_value(json!({
+            "messages": [{ "role": "user", "content": "hello" }],
+            "resourceId": "resource-1",
+            "threadId": "thread-1",
+            "runId": "run-1",
+            "maxSteps": 3,
+            "requestContext": {
+                "tenant": "acme"
+            }
+        }))
+        .expect("request should deserialize");
+
+        assert_eq!(request.resource_id.as_deref(), Some("resource-1"));
+        assert_eq!(request.thread_id.as_deref(), Some("thread-1"));
+        assert_eq!(request.run_id.as_deref(), Some("run-1"));
+        assert_eq!(request.max_steps, Some(3));
+        assert_eq!(request.request_context["tenant"], json!("acme"));
+    }
+
+    #[test]
+    fn workflow_request_deserializes_official_camel_case_fields() {
+        let request: StartWorkflowRunRequest = serde_json::from_value(json!({
+            "resourceId": "resource-7",
+            "inputData": { "topic": "rust" },
+            "requestContext": {
+                "trace_id": "trace-1"
+            }
+        }))
+        .expect("request should deserialize");
+
+        assert_eq!(request.resource_id.as_deref(), Some("resource-7"));
+        assert_eq!(request.input_data, Some(json!({ "topic": "rust" })));
+        assert_eq!(request.request_context["trace_id"], json!("trace-1"));
+    }
 }
