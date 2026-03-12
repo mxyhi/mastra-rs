@@ -73,6 +73,62 @@ impl AppendMessageRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CloneThreadRequest {
+    pub source_thread_id: Uuid,
+    pub new_thread_id: Option<Uuid>,
+    pub resource_id: Option<String>,
+    pub title: Option<String>,
+    pub metadata: Option<Value>,
+}
+
+impl CloneThreadRequest {
+    pub fn new(source_thread_id: Uuid) -> Self {
+        Self {
+            source_thread_id,
+            new_thread_id: None,
+            resource_id: None,
+            title: None,
+            metadata: None,
+        }
+    }
+
+    pub fn with_thread_id(mut self, thread_id: Uuid) -> Self {
+        self.new_thread_id = Some(thread_id);
+        self
+    }
+
+    pub fn with_resource_id(mut self, resource_id: impl Into<String>) -> Self {
+        self.resource_id = Some(resource_id.into());
+        self
+    }
+
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    pub fn with_metadata(mut self, metadata: Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteMessagesRequest {
+    pub thread_id: Uuid,
+    pub message_ids: Vec<Uuid>,
+}
+
+impl DeleteMessagesRequest {
+    pub fn new(thread_id: Uuid, message_ids: Vec<Uuid>) -> Self {
+        Self {
+            thread_id,
+            message_ids,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListThreadsQuery {
     pub resource_id: Option<String>,

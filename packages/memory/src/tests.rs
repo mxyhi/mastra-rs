@@ -9,8 +9,9 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    AppendMessageRequest, CreateThreadRequest, HistoryQuery, InMemoryMemoryStore, Memory,
-    ListMessagesQuery, ListThreadsQuery, MemoryStore, MessageRole, Pagination,
+    AppendMessageRequest, CloneThreadRequest, CreateThreadRequest, DeleteMessagesRequest,
+    HistoryQuery, InMemoryMemoryStore, ListMessagesQuery, ListThreadsQuery, Memory, MemoryStore,
+    MessageRole, Pagination,
 };
 
 #[tokio::test]
@@ -129,38 +130,42 @@ async fn missing_thread_returns_error() {
 #[tokio::test]
 async fn bridge_implements_core_memory_engine() {
     let memory = Memory::new(InMemoryMemoryStore::default());
-    let thread = memory
-        .create_thread(CoreCreateThreadRequest {
+    let thread = MemoryEngine::create_thread(
+        &memory,
+        CoreCreateThreadRequest {
             id: None,
             resource_id: Some("resource-bridge".into()),
             title: Some("Bridge".into()),
             metadata: json!({ "source": "test" }),
-        })
-        .await
-        .expect("thread should be created");
+        },
+    )
+    .await
+    .expect("thread should be created");
 
-    memory
-        .append_messages(
-            &thread.id,
-            vec![MemoryMessage {
-                id: Uuid::new_v4().to_string(),
-                thread_id: thread.id.clone(),
-                role: MemoryRole::User,
-                content: "hello bridge".into(),
-                created_at: Utc::now(),
-                metadata: json!({}),
-            }],
-        )
-        .await
-        .expect("message should be stored");
+    MemoryEngine::append_messages(
+        &memory,
+        &thread.id,
+        vec![MemoryMessage {
+            id: Uuid::new_v4().to_string(),
+            thread_id: thread.id.clone(),
+            role: MemoryRole::User,
+            content: "hello bridge".into(),
+            created_at: Utc::now(),
+            metadata: json!({}),
+        }],
+    )
+    .await
+    .expect("message should be stored");
 
-    let messages = memory
-        .list_messages(mastra_core::MemoryRecallRequest {
+    let messages = MemoryEngine::list_messages(
+        &memory,
+        mastra_core::MemoryRecallRequest {
             thread_id: thread.id.clone(),
             limit: Some(10),
-        })
-        .await
-        .expect("messages should be listed");
+        },
+    )
+    .await
+    .expect("messages should be listed");
 
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].content, "hello bridge");
@@ -168,4 +173,185 @@ async fn bridge_implements_core_memory_engine() {
 
     let _ = Arc::new(memory) as Arc<dyn MemoryEngine>;
     let _ = MemoryConfig::default();
+}
+
+#[tokio::test]
+async fn memory_facade_lists_threads_and_messages() {
+    let memory = Memory::in_memory();
+    let thread = memory
+        .create_thread(CreateThreadRequest::new("resource-list", "List demo"))
+        .await
+        .expect("thread should be created");
+
+    memory
+        .append_message(AppendMessageRequest::new(
+            thread.id,
+            MessageRole::User,
+            "hello facade",
+        ))
+        .await
+        .expect("message should be appended");
+
+    let threads = memory
+        .list_threads(ListThreadsQuery {
+            resource_id: Some("resource-list".into()),
+            pagination: Pagination::new(0, 10),
+        })
+        .await
+        .expect("threads should be listed");
+    let messages = memory
+        .list_messages_page(ListMessagesQuery {
+            thread_id: thread.id,
+            pagination: Pagination::new(0, 10),
+        })
+        .await
+        .expect("messages should be listed");
+
+    assert_eq!(threads.total, 1);
+    assert_eq!(threads.items[0].title, "List demo");
+    assert_eq!(messages.total, 1);
+    assert_eq!(messages.items[0].text, "hello facade");
+}
+
+#[tokio::test]
+async fn clone_thread_copies_history_and_applies_overrides() {
+    let memory = Memory::in_memory();
+    let mut thread_request = CreateThreadRequest::new("resource-clone", "Original");
+    thread_request.metadata = json!({ "scope": "seed" });
+    let thread = memory
+        .create_thread(thread_request)
+        .await
+        .expect("thread should be created");
+
+    memory
+        .append_message(AppendMessageRequest::new(
+            thread.id,
+            MessageRole::User,
+            "message-one",
+        ))
+        .await
+        .expect("first message should be appended");
+    memory
+        .append_message(AppendMessageRequest::new(
+            thread.id,
+            MessageRole::Assistant,
+            "message-two",
+        ))
+        .await
+        .expect("second message should be appended");
+
+    let cloned = memory
+        .clone_thread(
+            CloneThreadRequest::new(thread.id)
+                .with_title("Cloned")
+                .with_resource_id("resource-copy"),
+        )
+        .await
+        .expect("thread should be cloned");
+    let cloned_messages = memory
+        .list_messages_page(ListMessagesQuery {
+            thread_id: cloned.id,
+            pagination: Pagination::new(0, 10),
+        })
+        .await
+        .expect("cloned messages should be listed");
+
+    assert_ne!(cloned.id, thread.id);
+    assert_eq!(cloned.resource_id, "resource-copy");
+    assert_eq!(cloned.title, "Cloned");
+    assert_eq!(cloned.metadata, json!({ "scope": "seed" }));
+    assert_eq!(
+        cloned_messages
+            .items
+            .into_iter()
+            .map(|message| message.text)
+            .collect::<Vec<_>>(),
+        vec!["message-one".to_string(), "message-two".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn delete_messages_prunes_only_selected_entries() {
+    let memory = Memory::in_memory();
+    let thread = memory
+        .create_thread(CreateThreadRequest::new(
+            "resource-delete",
+            "Delete messages",
+        ))
+        .await
+        .expect("thread should be created");
+
+    let first = memory
+        .append_message(AppendMessageRequest::new(
+            thread.id,
+            MessageRole::User,
+            "keep me?",
+        ))
+        .await
+        .expect("first message should be appended");
+    let second = memory
+        .append_message(AppendMessageRequest::new(
+            thread.id,
+            MessageRole::Assistant,
+            "delete me",
+        ))
+        .await
+        .expect("second message should be appended");
+
+    let deleted = memory
+        .delete_messages(DeleteMessagesRequest::new(thread.id, vec![second.id]))
+        .await
+        .expect("messages should be deleted");
+    let remaining = memory
+        .list_messages_page(ListMessagesQuery {
+            thread_id: thread.id,
+            pagination: Pagination::new(0, 10),
+        })
+        .await
+        .expect("messages should be listed");
+
+    assert_eq!(deleted, 1);
+    assert_eq!(remaining.total, 1);
+    assert_eq!(remaining.items[0].id, first.id);
+}
+
+#[tokio::test]
+async fn delete_thread_removes_thread_and_history() {
+    let memory = Memory::in_memory();
+    let thread = memory
+        .create_thread(CreateThreadRequest::new(
+            "resource-thread-delete",
+            "Delete thread",
+        ))
+        .await
+        .expect("thread should be created");
+
+    memory
+        .append_message(AppendMessageRequest::new(
+            thread.id,
+            MessageRole::User,
+            "gone soon",
+        ))
+        .await
+        .expect("message should be appended");
+
+    memory
+        .delete_thread(thread.id)
+        .await
+        .expect("thread should be deleted");
+
+    let thread = memory
+        .get_thread(thread.id)
+        .await
+        .expect("thread lookup should succeed");
+    let threads = memory
+        .list_threads(ListThreadsQuery {
+            resource_id: Some("resource-thread-delete".into()),
+            pagination: Pagination::new(0, 10),
+        })
+        .await
+        .expect("threads should be listed");
+
+    assert!(thread.is_none());
+    assert_eq!(threads.total, 0);
 }

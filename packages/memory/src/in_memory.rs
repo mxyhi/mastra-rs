@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -7,8 +7,8 @@ use parking_lot::RwLock;
 use uuid::Uuid;
 
 use crate::model::{
-    AppendMessageRequest, CreateThreadRequest, HistoryQuery, ListMessagesQuery, ListThreadsQuery,
-    Message, MessagePage, Thread, ThreadPage,
+    AppendMessageRequest, CloneThreadRequest, CreateThreadRequest, DeleteMessagesRequest,
+    HistoryQuery, ListMessagesQuery, ListThreadsQuery, Message, MessagePage, Thread, ThreadPage,
 };
 use crate::store::{MemoryStore, MemoryStoreError, MemoryStoreResult, ensure_valid_pagination};
 
@@ -151,5 +151,95 @@ impl MemoryStore for InMemoryMemoryStore {
         let start = messages.len().saturating_sub(limit);
 
         Ok(messages[start..].to_vec())
+    }
+
+    async fn clone_thread(&self, input: CloneThreadRequest) -> MemoryStoreResult<Thread> {
+        let mut state = self.state.write();
+        let source_thread = state
+            .threads
+            .get(&input.source_thread_id)
+            .cloned()
+            .ok_or(MemoryStoreError::ThreadNotFound(input.source_thread_id))?;
+        let source_messages = state
+            .messages
+            .get(&input.source_thread_id)
+            .cloned()
+            .unwrap_or_default();
+        let now = Utc::now();
+        let cloned_thread = Thread {
+            id: input.new_thread_id.unwrap_or_else(Uuid::new_v4),
+            resource_id: input.resource_id.unwrap_or(source_thread.resource_id),
+            title: input
+                .title
+                .unwrap_or_else(|| format!("{} (copy)", source_thread.title)),
+            metadata: input.metadata.unwrap_or(source_thread.metadata),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let cloned_messages = source_messages
+            .into_iter()
+            .map(|message| Message {
+                id: Uuid::new_v4(),
+                thread_id: cloned_thread.id,
+                role: message.role,
+                text: message.text,
+                metadata: message.metadata,
+                created_at: message.created_at,
+            })
+            .collect::<Vec<_>>();
+        let updated_at = cloned_messages
+            .last()
+            .map(|message| message.created_at)
+            .unwrap_or(cloned_thread.created_at);
+        let cloned_thread = Thread {
+            updated_at,
+            ..cloned_thread
+        };
+
+        state
+            .threads
+            .insert(cloned_thread.id, cloned_thread.clone());
+        state.messages.insert(cloned_thread.id, cloned_messages);
+
+        Ok(cloned_thread)
+    }
+
+    async fn delete_messages(&self, input: DeleteMessagesRequest) -> MemoryStoreResult<usize> {
+        let mut state = self.state.write();
+        let created_at = state
+            .threads
+            .get(&input.thread_id)
+            .map(|thread| thread.created_at)
+            .ok_or(MemoryStoreError::ThreadNotFound(input.thread_id))?;
+        let messages = state
+            .messages
+            .get_mut(&input.thread_id)
+            .ok_or(MemoryStoreError::ThreadNotFound(input.thread_id))?;
+        let delete_ids = input.message_ids.into_iter().collect::<HashSet<_>>();
+        let original_len = messages.len();
+
+        messages.retain(|message| !delete_ids.contains(&message.id));
+        let deleted = original_len.saturating_sub(messages.len());
+        if deleted > 0 {
+            let updated_at = messages
+                .last()
+                .map(|message| message.created_at)
+                .unwrap_or(created_at);
+            if let Some(thread) = state.threads.get_mut(&input.thread_id) {
+                thread.updated_at = updated_at;
+            }
+        }
+
+        Ok(deleted)
+    }
+
+    async fn delete_thread(&self, thread_id: Uuid) -> MemoryStoreResult<()> {
+        let mut state = self.state.write();
+        if state.threads.remove(&thread_id).is_none() {
+            return Err(MemoryStoreError::ThreadNotFound(thread_id));
+        }
+        state.messages.remove(&thread_id);
+        Ok(())
     }
 }

@@ -3,8 +3,9 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::model::{
-    AppendMessageRequest, CreateThreadRequest, HistoryQuery, ListMessagesQuery, ListThreadsQuery,
-    Message, MessagePage, Pagination, Thread, ThreadPage,
+    AppendMessageRequest, CloneThreadRequest, CreateThreadRequest, DeleteMessagesRequest,
+    HistoryQuery, ListMessagesQuery, ListThreadsQuery, Message, MessagePage, Pagination, Thread,
+    ThreadPage,
 };
 
 pub type MemoryStoreResult<T> = Result<T, MemoryStoreError>;
@@ -15,6 +16,8 @@ pub enum MemoryStoreError {
     ThreadNotFound(Uuid),
     #[error("pagination per_page must be greater than zero")]
     InvalidPagination,
+    #[error("{0}")]
+    Backend(String),
 }
 
 #[async_trait]
@@ -30,6 +33,12 @@ pub trait MemoryStore: Send + Sync {
     async fn list_messages(&self, query: ListMessagesQuery) -> MemoryStoreResult<MessagePage>;
 
     async fn history(&self, query: HistoryQuery) -> MemoryStoreResult<Vec<Message>>;
+
+    async fn clone_thread(&self, input: CloneThreadRequest) -> MemoryStoreResult<Thread>;
+
+    async fn delete_messages(&self, input: DeleteMessagesRequest) -> MemoryStoreResult<usize>;
+
+    async fn delete_thread(&self, thread_id: Uuid) -> MemoryStoreResult<()>;
 }
 
 pub(crate) fn ensure_valid_pagination(pagination: Pagination) -> MemoryStoreResult<()> {

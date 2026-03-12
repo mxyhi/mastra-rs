@@ -13,8 +13,9 @@ use uuid::Uuid;
 
 pub use in_memory::InMemoryMemoryStore;
 pub use model::{
-    AppendMessageRequest, CreateThreadRequest, HistoryQuery, ListMessagesQuery, ListThreadsQuery,
-    Message, MessagePage, MessageRole, Pagination, Thread, ThreadPage,
+    AppendMessageRequest, CloneThreadRequest, CreateThreadRequest, DeleteMessagesRequest,
+    HistoryQuery, ListMessagesQuery, ListThreadsQuery, Message, MessagePage, MessageRole,
+    Pagination, Thread, ThreadPage,
 };
 pub use store::{MemoryStore, MemoryStoreError, MemoryStoreResult};
 
@@ -40,11 +41,53 @@ impl Memory {
     pub fn store(&self) -> Arc<dyn MemoryStore> {
         Arc::clone(&self.store)
     }
+
+    pub async fn create_thread(&self, input: CreateThreadRequest) -> MemoryStoreResult<Thread> {
+        self.store.create_thread(input).await
+    }
+
+    pub async fn get_thread(&self, thread_id: Uuid) -> MemoryStoreResult<Option<Thread>> {
+        self.store.get_thread(thread_id).await
+    }
+
+    pub async fn list_threads(&self, query: ListThreadsQuery) -> MemoryStoreResult<ThreadPage> {
+        self.store.list_threads(query).await
+    }
+
+    pub async fn append_message(&self, input: AppendMessageRequest) -> MemoryStoreResult<Message> {
+        self.store.append_message(input).await
+    }
+
+    pub async fn list_messages_page(
+        &self,
+        query: ListMessagesQuery,
+    ) -> MemoryStoreResult<MessagePage> {
+        self.store.list_messages(query).await
+    }
+
+    pub async fn history(&self, query: HistoryQuery) -> MemoryStoreResult<Vec<Message>> {
+        self.store.history(query).await
+    }
+
+    pub async fn clone_thread(&self, input: CloneThreadRequest) -> MemoryStoreResult<Thread> {
+        self.store.clone_thread(input).await
+    }
+
+    pub async fn delete_messages(&self, input: DeleteMessagesRequest) -> MemoryStoreResult<usize> {
+        self.store.delete_messages(input).await
+    }
+
+    pub async fn delete_thread(&self, thread_id: Uuid) -> MemoryStoreResult<()> {
+        self.store.delete_thread(thread_id).await
+    }
 }
 
 #[async_trait]
 impl MemoryEngine for Memory {
-    async fn create_thread(&self, request: CoreCreateThreadRequest) -> mastra_core::Result<CoreThread> {
+    async fn create_thread(
+        &self,
+        request: CoreCreateThreadRequest,
+    ) -> mastra_core::Result<CoreThread> {
         let thread = self
             .store
             .create_thread(CreateThreadRequest {
@@ -61,17 +104,18 @@ impl MemoryEngine for Memory {
 
     async fn get_thread(&self, thread_id: &str) -> mastra_core::Result<Option<CoreThread>> {
         let thread_id = parse_uuid(thread_id, "thread id")?;
-        self
-            .store
+        self.store
             .get_thread(thread_id)
             .await
             .map(|thread| thread.map(thread_to_core))
             .map_err(map_store_error)
     }
 
-    async fn list_threads(&self, resource_id: Option<&str>) -> mastra_core::Result<Vec<CoreThread>> {
-        self
-            .store
+    async fn list_threads(
+        &self,
+        resource_id: Option<&str>,
+    ) -> mastra_core::Result<Vec<CoreThread>> {
+        self.store
             .list_threads(ListThreadsQuery {
                 resource_id: resource_id.map(str::to_string),
                 pagination: Pagination::new(0, usize::MAX),
@@ -89,10 +133,11 @@ impl MemoryEngine for Memory {
         let thread_id = parse_uuid(thread_id, "thread id")?;
 
         for message in messages {
-            self
-                .store
+            self.store
                 .append_message(AppendMessageRequest {
-                    message_id: Some(Uuid::parse_str(&message.id).unwrap_or_else(|_| Uuid::new_v4())),
+                    message_id: Some(
+                        Uuid::parse_str(&message.id).unwrap_or_else(|_| Uuid::new_v4()),
+                    ),
                     thread_id,
                     role: role_from_core(message.role),
                     text: message.content,
@@ -111,8 +156,7 @@ impl MemoryEngine for Memory {
         request: MemoryRecallRequest,
     ) -> mastra_core::Result<Vec<MemoryMessage>> {
         let thread_id = parse_uuid(&request.thread_id, "thread id")?;
-        self
-            .store
+        self.store
             .history(HistoryQuery {
                 thread_id,
                 limit: request.limit,
