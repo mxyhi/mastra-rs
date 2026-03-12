@@ -16,10 +16,10 @@ use uuid::Uuid;
 use crate::{
     contracts::{
         AppendMemoryMessagesRequest, AppendMemoryMessagesResponse, CreateMemoryThreadRequest,
-        CreateMemoryThreadResponse, CreateWorkflowRunRequest, GenerateRequest,
-        ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse,
-        ListThreadsResponse, ListWorkflowsResponse, RouteDescription,
-        StartWorkflowRunRequest, StartWorkflowRunResponse, WorkflowRunRecord,
+        CreateMemoryThreadResponse, CreateWorkflowRunRequest, GenerateRequest, ListAgentsResponse,
+        ListMemoriesResponse, ListMemoryMessagesResponse, ListThreadsResponse,
+        ListWorkflowsResponse, RouteDescription, StartWorkflowRunRequest, StartWorkflowRunResponse,
+        WorkflowRunRecord,
     },
     error::{ServerError, ServerResult},
     registry::RuntimeRegistry,
@@ -145,16 +145,8 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
             "/agents/{agent_id}/generate",
             "Generate an agent response",
         ),
-        (
-            "GET",
-            "/memories",
-            "List registered memories",
-        ),
-        (
-            "GET",
-            "/memory/{memory_id}/threads",
-            "List memory threads",
-        ),
+        ("GET", "/memories", "List registered memories"),
+        ("GET", "/memory/{memory_id}/threads", "List memory threads"),
         (
             "POST",
             "/memory/{memory_id}/threads",
@@ -228,6 +220,27 @@ async fn list_workflows(State(state): State<AppState>) -> Json<ListWorkflowsResp
     Json(ListWorkflowsResponse {
         workflows: state.registry.list_workflows(),
     })
+}
+
+#[instrument(skip(state))]
+async fn list_memories(State(state): State<AppState>) -> Json<ListMemoriesResponse> {
+    Json(ListMemoriesResponse {
+        memories: state.registry.list_memory(),
+    })
+}
+
+#[instrument(skip(state))]
+async fn list_memory_threads(
+    State(state): State<AppState>,
+    Path(memory_id): Path<String>,
+) -> ServerResult<Json<ListThreadsResponse>> {
+    let memory = state.registry.find_memory(&memory_id)?;
+    let threads = memory
+        .list_threads(None)
+        .await
+        .map_err(ServerError::internal)?;
+
+    Ok(Json(ListThreadsResponse { threads }))
 }
 
 #[instrument(skip(state, request))]
