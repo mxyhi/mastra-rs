@@ -19,6 +19,9 @@ fn build_agent() -> Agent {
             Ok(mastra_core::ModelResponse {
                 text: format!("agent: {}", request.prompt),
                 data: json!({ "echo": request.prompt }),
+                finish_reason: mastra_core::FinishReason::Stop,
+                usage: None,
+                tool_calls: Vec::new(),
             })
         })),
         tools: Vec::new(),

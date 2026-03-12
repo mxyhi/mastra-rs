@@ -211,7 +211,9 @@ mod tests {
 
         assert_eq!(create_thread.status(), StatusCode::OK);
         let payload: Value = serde_json::from_slice(
-            &to_bytes(create_thread.into_body(), usize::MAX).await.unwrap(),
+            &to_bytes(create_thread.into_body(), usize::MAX)
+                .await
+                .unwrap(),
         )
         .unwrap();
         let thread_id = payload["thread"]["id"].as_str().unwrap().to_owned();
@@ -247,25 +249,34 @@ mod tests {
     async fn compatibility_wrapper_exposes_unified_route_catalog() {
         let response = MastraHttpServer::new()
             .router()
-            .oneshot(Request::builder().uri("/api/routes").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/routes")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let payload: Value = serde_json::from_slice(&body).unwrap();
-        assert!(payload
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|route| route["path"] == "/api/agents/{agent_id}/stream"));
+        assert!(
+            payload
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|route| route["path"] == "/api/agents/{agent_id}/stream")
+        );
     }
 
     #[test]
     fn compatibility_wrapper_route_descriptions_follow_api_prefix() {
-        assert!(MastraHttpServer::route_descriptions()
-            .iter()
-            .any(|route| route.path == "/api/health"));
+        assert!(
+            MastraHttpServer::route_descriptions()
+                .iter()
+                .any(|route| route.path == "/api/health")
+        );
     }
 
     #[test]

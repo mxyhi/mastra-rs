@@ -13,9 +13,9 @@ pub use types::{
     ErrorResponse, FinishReason, GenerateRequest, GenerateResponse, GenerateStreamEvent,
     GenerateStreamFinishEvent, GenerateStreamStartEvent, GenerateStreamTextDeltaEvent,
     ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse, ListThreadsResponse,
-    ListWorkflowsResponse, MemoryMessageInput, MemoryMessageRole, MemorySummary,
-    RouteDescription, StartWorkflowRunRequest, StartWorkflowRunResponse, UsageStats,
-    WorkflowRunRecord, WorkflowRunRef, WorkflowRunStatus, WorkflowSummary,
+    ListWorkflowsResponse, MemoryMessageInput, MemoryMessageRole, MemorySummary, RouteDescription,
+    StartWorkflowRunRequest, StartWorkflowRunResponse, UsageStats, WorkflowRunRecord,
+    WorkflowRunRef, WorkflowRunStatus, WorkflowSummary,
 };
 
 #[cfg(test)]
@@ -56,6 +56,9 @@ mod tests {
                     Ok(ModelResponse {
                         text: format!("echo: {}", request.prompt),
                         data: Value::Null,
+                        finish_reason: mastra_core::FinishReason::Stop,
+                        usage: None,
+                        tool_calls: Vec::new(),
                     })
                 })),
                 tools: Vec::new(),

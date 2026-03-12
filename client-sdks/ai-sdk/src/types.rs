@@ -1,5 +1,5 @@
-use indexmap::IndexMap;
 use futures::stream::BoxStream;
+use indexmap::IndexMap;
 use mastra_client_sdks_client_js::{FinishReason, GenerateResponse, UsageStats};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -1,15 +1,13 @@
 use async_trait::async_trait;
 use futures::{StreamExt, stream::BoxStream};
 use mastra_client_sdks_client_js::{
-    AgentClient, AgentMessages, ChatMessage, GenerateRequest, GenerateResponse,
-    GenerateStreamEvent,
+    AgentClient, AgentMessages, ChatMessage, GenerateRequest, GenerateResponse, GenerateStreamEvent,
 };
 use uuid::Uuid;
 
 use crate::{
-    AiSdkError, AiSdkEvent, AiSdkEventStream, AiSdkFinishEvent, AiSdkGenerateRequest,
-    AiSdkMessage, AiSdkRole, AiSdkRun, AiSdkStartEvent, AiSdkTextDeltaEvent,
-    AssistantMessageAccumulator,
+    AiSdkError, AiSdkEvent, AiSdkEventStream, AiSdkFinishEvent, AiSdkGenerateRequest, AiSdkMessage,
+    AiSdkRole, AiSdkRun, AiSdkStartEvent, AiSdkTextDeltaEvent, AssistantMessageAccumulator,
 };
 
 #[async_trait]
@@ -31,16 +29,12 @@ pub trait AiSdkEventSource: Send + Sync {
             .run_id()
             .map(str::to_owned)
             .unwrap_or_else(|| Uuid::now_v7().to_string());
-        let assistant_message = accumulator
-            .current_message()
-            .cloned()
-            .ok_or_else(|| AiSdkError::Validation("assistant stream returned no final message".to_owned()))?;
+        let assistant_message = accumulator.current_message().cloned().ok_or_else(|| {
+            AiSdkError::Validation("assistant stream returned no final message".to_owned())
+        })?;
         let raw = GenerateResponse {
             text: assistant_message.content.clone(),
-            finish_reason: accumulator
-                .finish_reason()
-                .cloned()
-                .unwrap_or_default(),
+            finish_reason: accumulator.finish_reason().cloned().unwrap_or_default(),
             usage: accumulator.usage().cloned(),
         };
 
@@ -115,11 +109,7 @@ impl AiSdkEventSource for AiSdkAgent {
             .map_err(AiSdkError::Client)?;
 
         let mapped: BoxStream<'static, Result<AiSdkEvent, AiSdkError>> = stream
-            .map(|event| {
-                event
-                    .map_err(AiSdkError::Client)
-                    .and_then(map_stream_event)
-            })
+            .map(|event| event.map_err(AiSdkError::Client).and_then(map_stream_event))
             .boxed();
 
         Ok(mapped)

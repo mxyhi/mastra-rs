@@ -1,8 +1,9 @@
-use async_trait::async_trait;
 use async_stream::stream;
+use async_trait::async_trait;
 use futures::{StreamExt, stream::BoxStream};
 use mastra_core::{
-    Agent, AgentGenerateRequest, AgentStreamRequest, ModelEvent, RequestContext, Workflow,
+    Agent, AgentGenerateRequest, AgentStreamRequest, FinishReason as CoreFinishReason, ModelEvent,
+    ModelResponse as CoreModelResponse, RequestContext, UsageStats as CoreUsageStats, Workflow,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -63,12 +64,18 @@ impl AgentRuntime for CoreAgentRuntime {
                 prompt: request.messages.flatten_text(),
                 thread_id: request.thread_id,
                 resource_id: request.resource_id,
+                run_id: request.run_id,
+                max_steps: request.max_steps,
                 request_context: RequestContext::from_value_map(request.request_context),
             })
             .await
             .map_err(ServerError::internal)?;
 
-        Ok(generate_response_from_parts(response.text, &response.data))
+        Ok(GenerateResponse {
+            text: response.text,
+            finish_reason: map_finish_reason(response.finish_reason),
+            usage: map_usage(response.usage),
+        })
     }
 
     fn stream(
@@ -84,6 +91,8 @@ impl AgentRuntime for CoreAgentRuntime {
             prompt: request.messages.flatten_text(),
             thread_id: request.thread_id,
             resource_id: request.resource_id,
+            run_id: request.run_id,
+            max_steps: request.max_steps,
             request_context: RequestContext::from_value_map(request.request_context),
         });
 
@@ -118,10 +127,7 @@ impl AgentRuntime for CoreAgentRuntime {
                         }));
                     }
                     ModelEvent::Done(response) => {
-                        let normalized = generate_response_from_parts(
-                            response.text.clone(),
-                            &response.data,
-                        );
+                        let normalized = generate_response_from_model_response(&response);
                         if !emitted_delta && !normalized.text.is_empty() {
                             yield Ok(GenerateStreamEvent::TextDelta(GenerateStreamTextDeltaEvent {
                                 run_id: run_id.clone(),
@@ -179,32 +185,34 @@ impl WorkflowRuntime for CoreWorkflowRuntime {
     }
 }
 
-fn generate_response_from_parts(text: String, data: &Value) -> GenerateResponse {
+fn generate_response_from_model_response(response: &CoreModelResponse) -> GenerateResponse {
     GenerateResponse {
-        text,
-        finish_reason: extract_finish_reason(data),
-        usage: extract_usage(data),
+        text: response.text.clone(),
+        finish_reason: map_finish_reason(extract_finish_reason(response)),
+        usage: map_usage(extract_usage(response)),
     }
 }
 
-fn extract_finish_reason(data: &Value) -> FinishReason {
-    let Some(value) = data.get("finish_reason").and_then(Value::as_str) else {
-        return FinishReason::Stop;
-    };
+fn extract_finish_reason(response: &CoreModelResponse) -> CoreFinishReason {
+    response.normalized_finish_reason()
+}
 
+fn extract_usage(response: &CoreModelResponse) -> Option<CoreUsageStats> {
+    response.normalized_usage()
+}
+
+fn map_finish_reason(value: CoreFinishReason) -> FinishReason {
     match value {
-        "tool_call" | "tool_calls" => FinishReason::ToolCall,
-        "length" => FinishReason::Length,
-        _ => FinishReason::Stop,
+        CoreFinishReason::Stop => FinishReason::Stop,
+        CoreFinishReason::ToolCall => FinishReason::ToolCall,
+        CoreFinishReason::Length => FinishReason::Length,
     }
 }
 
-fn extract_usage(data: &Value) -> Option<UsageStats> {
-    let usage = data.get("usage")?;
-    let prompt_tokens = usage.get("prompt_tokens")?.as_u64()?;
-    let completion_tokens = usage.get("completion_tokens")?.as_u64()?;
+fn map_usage(value: Option<CoreUsageStats>) -> Option<UsageStats> {
+    let usage = value?;
     Some(UsageStats {
-        prompt_tokens: prompt_tokens as u32,
-        completion_tokens: completion_tokens as u32,
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
     })
 }

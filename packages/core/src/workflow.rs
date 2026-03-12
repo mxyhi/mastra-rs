@@ -134,6 +134,8 @@ impl Step {
                             prompt,
                             thread_id: None,
                             resource_id: None,
+                            run_id: context.run_id,
+                            max_steps: None,
                             request_context: context.request_context,
                         })
                         .await?;

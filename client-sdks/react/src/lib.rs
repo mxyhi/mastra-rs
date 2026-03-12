@@ -35,6 +35,9 @@ mod tests {
                     Ok(ModelResponse {
                         text: format!("echo: {}", request.prompt),
                         data: Value::Null,
+                        finish_reason: mastra_core::FinishReason::Stop,
+                        usage: None,
+                        tool_calls: Vec::new(),
                     })
                 })),
                 tools: Vec::new(),

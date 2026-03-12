@@ -156,6 +156,8 @@ fn agent_as_tool(agent: Agent) -> Tool {
                     prompt,
                     thread_id: context.thread_id,
                     resource_id: context.request_context.resource_id().map(str::to_owned),
+                    run_id: context.run_id,
+                    max_steps: None,
                     request_context: context.request_context,
                 })
                 .await?;

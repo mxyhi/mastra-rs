@@ -152,6 +152,8 @@ impl Mastra {
                 prompt: prompt.into(),
                 thread_id: None,
                 resource_id: None,
+                run_id: None,
+                max_steps: None,
                 request_context: RequestContext::new(),
             },
         )
@@ -266,6 +268,9 @@ mod tests {
             Ok(ModelResponse {
                 text: "stream-complete".into(),
                 data: json!({ "source": "generate" }),
+                finish_reason: crate::FinishReason::Stop,
+                usage: None,
+                tool_calls: Vec::new(),
             })
         }
 
@@ -279,6 +284,9 @@ mod tests {
                 Ok(ModelEvent::Done(ModelResponse {
                     text: "stream-complete".into(),
                     data: json!({ "source": "stream" }),
+                    finish_reason: crate::FinishReason::Stop,
+                    usage: None,
+                    tool_calls: Vec::new(),
                 })),
             ])
             .boxed()
@@ -409,6 +417,8 @@ mod tests {
                 prompt: "How is today?".into(),
                 thread_id: Some("thread-1".into()),
                 resource_id: None,
+                run_id: None,
+                max_steps: None,
                 request_context: RequestContext::new(),
             })
             .await
@@ -437,6 +447,8 @@ mod tests {
                 prompt: "remember streamed output".into(),
                 thread_id: Some("thread-stream".into()),
                 resource_id: Some("resource-stream".into()),
+                run_id: None,
+                max_steps: None,
                 request_context: RequestContext::new(),
             })
             .try_collect::<Vec<_>>()

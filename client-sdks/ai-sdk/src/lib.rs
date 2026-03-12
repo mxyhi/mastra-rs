@@ -4,9 +4,8 @@ mod types;
 pub use agent::{AiSdkAgent, AiSdkEventSource};
 pub use mastra_client_sdks_client_js::GenerateResponse;
 pub use types::{
-    AiSdkError, AiSdkEvent, AiSdkEventStream, AiSdkFinishEvent, AiSdkGenerateRequest,
-    AiSdkMessage, AiSdkRole, AiSdkRun, AiSdkStartEvent, AiSdkTextDeltaEvent,
-    AssistantMessageAccumulator,
+    AiSdkError, AiSdkEvent, AiSdkEventStream, AiSdkFinishEvent, AiSdkGenerateRequest, AiSdkMessage,
+    AiSdkRole, AiSdkRun, AiSdkStartEvent, AiSdkTextDeltaEvent, AssistantMessageAccumulator,
 };
 
 #[cfg(test)]
@@ -42,6 +41,9 @@ mod tests {
                     Ok(ModelResponse {
                         text: format!("echo: {}", request.prompt),
                         data: Value::Null,
+                        finish_reason: mastra_core::FinishReason::Stop,
+                        usage: None,
+                        tool_calls: Vec::new(),
                     })
                 })),
                 tools: Vec::new(),

@@ -17,7 +17,10 @@ pub use memory::{
     CreateThreadRequest, MemoryConfig, MemoryEngine, MemoryMessage, MemoryRecallRequest,
     MemoryRole, Thread,
 };
-pub use model::{LanguageModel, ModelEvent, ModelRequest, ModelResponse, StaticModel};
+pub use model::{
+    FinishReason, LanguageModel, ModelEvent, ModelRequest, ModelResponse, ModelToolCall,
+    ModelToolResult, StaticModel, UsageStats,
+};
 pub use request_context::{RESERVED_RESOURCE_ID, RESERVED_THREAD_ID, RequestContext};
 pub use tool::{Tool, ToolConfig, ToolExecutionContext};
 pub use workflow::{

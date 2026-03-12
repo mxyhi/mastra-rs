@@ -141,6 +141,8 @@ pub async fn run_headless(options: RunOptions) -> mastra_core::Result<RunOutput>
             prompt: options.prompt,
             thread_id: options.thread_id,
             resource_id: options.resource_id.clone(),
+            run_id: None,
+            max_steps: None,
             request_context,
         })
         .await?;

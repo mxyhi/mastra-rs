@@ -69,14 +69,10 @@ where
                     events.push(event);
                 }
 
-                let assistant_message = accumulator
-                    .clone()
-                    .into_message()
-                    .ok_or_else(|| AiSdkError::Validation("assistant stream returned no final message".to_owned()))?;
-                let run_id = accumulator
-                    .run_id()
-                    .map(str::to_owned)
-                    .unwrap_or_default();
+                let assistant_message = accumulator.clone().into_message().ok_or_else(|| {
+                    AiSdkError::Validation("assistant stream returned no final message".to_owned())
+                })?;
+                let run_id = accumulator.run_id().map(str::to_owned).unwrap_or_default();
 
                 Ok(AiSdkRun {
                     run_id,

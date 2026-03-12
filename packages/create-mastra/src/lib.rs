@@ -48,6 +48,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         prompt: "Hello from create-mastra".to_owned(),
         thread_id: None,
         resource_id: Some("starter".to_owned()),
+        run_id: None,
+        max_steps: None,
         request_context: RequestContext::new().with_resource_id("starter"),
     }).await?;
 

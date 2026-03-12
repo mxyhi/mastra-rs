@@ -485,11 +485,13 @@ mod tests {
                     message_id: message_id.clone(),
                     thread_id: None,
                 })),
-                Ok(GenerateStreamEvent::TextDelta(GenerateStreamTextDeltaEvent {
-                    run_id: run_id.clone(),
-                    message_id: message_id.clone(),
-                    delta: text.clone(),
-                })),
+                Ok(GenerateStreamEvent::TextDelta(
+                    GenerateStreamTextDeltaEvent {
+                        run_id: run_id.clone(),
+                        message_id: message_id.clone(),
+                        delta: text.clone(),
+                    },
+                )),
                 Ok(GenerateStreamEvent::Finish(GenerateStreamFinishEvent {
                     run_id,
                     message_id,

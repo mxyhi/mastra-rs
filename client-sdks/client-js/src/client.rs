@@ -236,8 +236,10 @@ impl AgentClient {
     pub async fn stream(
         &self,
         request: GenerateRequest,
-    ) -> Result<impl Stream<Item = Result<GenerateStreamEvent, MastraClientError>> + Send + 'static, MastraClientError>
-    {
+    ) -> Result<
+        impl Stream<Item = Result<GenerateStreamEvent, MastraClientError>> + Send + 'static,
+        MastraClientError,
+    > {
         let response = self
             .inner
             .stream_request(
