@@ -4,13 +4,14 @@ use chrono::Utc;
 use indexmap::IndexMap;
 use mastra_core::{MemoryEngine, Tool};
 use parking_lot::RwLock;
+use tokio::{sync::broadcast, task::AbortHandle};
 use uuid::Uuid;
 
 use crate::{
     contracts::{
         AgentSummary, CreateWorkflowRunRequest, ListWorkflowRunsQuery, ListWorkflowRunsResponse,
         MemorySummary, StartWorkflowRunRequest, ToolSummary, WorkflowRunRecord, WorkflowRunStatus,
-        WorkflowSummary,
+        WorkflowStreamEvent, WorkflowSummary,
     },
     error::{ServerError, ServerResult},
     runtime::{AgentRuntime, WorkflowRuntime},
@@ -23,6 +24,9 @@ pub struct RuntimeRegistry {
     tools: Arc<RwLock<IndexMap<String, Tool>>>,
     workflows: Arc<RwLock<IndexMap<String, Arc<dyn WorkflowRuntime>>>>,
     workflow_runs: Arc<RwLock<IndexMap<Uuid, WorkflowRunRecord>>>,
+    workflow_run_events: Arc<RwLock<IndexMap<Uuid, Vec<WorkflowStreamEvent>>>>,
+    workflow_run_channels: Arc<RwLock<IndexMap<Uuid, broadcast::Sender<WorkflowStreamEvent>>>>,
+    workflow_run_tasks: Arc<RwLock<IndexMap<Uuid, AbortHandle>>>,
 }
 
 impl RuntimeRegistry {
@@ -258,6 +262,10 @@ impl RuntimeRegistry {
             });
         }
 
+        if let Some(handle) = self.workflow_run_tasks.write().shift_remove(&run_id) {
+            handle.abort();
+        }
+
         record.status = WorkflowRunStatus::Running;
         record.updated_at = Utc::now();
         record.resource_id = request
@@ -271,6 +279,81 @@ impl RuntimeRegistry {
         record.result = None;
         record.error = None;
         Ok(record.clone())
+    }
+
+    pub fn register_workflow_task(&self, run_id: Uuid, handle: AbortHandle) {
+        self.workflow_run_tasks.write().insert(run_id, handle);
+    }
+
+    pub fn clear_workflow_task(&self, run_id: Uuid) {
+        self.workflow_run_tasks.write().shift_remove(&run_id);
+    }
+
+    pub fn subscribe_workflow_events(
+        &self,
+        run_id: Uuid,
+    ) -> broadcast::Receiver<WorkflowStreamEvent> {
+        let sender = {
+            let mut channels = self.workflow_run_channels.write();
+            channels
+                .entry(run_id)
+                .or_insert_with(|| {
+                    let (sender, _receiver) = broadcast::channel(64);
+                    sender
+                })
+                .clone()
+        };
+        sender.subscribe()
+    }
+
+    pub fn reset_workflow_events(&self, run_id: Uuid) {
+        self.workflow_run_events.write().shift_remove(&run_id);
+        self.workflow_run_channels.write().shift_remove(&run_id);
+    }
+
+    pub fn record_workflow_event(&self, run_id: Uuid, event: WorkflowStreamEvent) {
+        self.workflow_run_events
+            .write()
+            .entry(run_id)
+            .or_default()
+            .push(event.clone());
+
+        let sender = {
+            let mut channels = self.workflow_run_channels.write();
+            channels
+                .entry(run_id)
+                .or_insert_with(|| {
+                    let (sender, _receiver) = broadcast::channel(64);
+                    sender
+                })
+                .clone()
+        };
+        let _ = sender.send(event);
+    }
+
+    pub fn workflow_events(&self, run_id: Uuid) -> Vec<WorkflowStreamEvent> {
+        self.workflow_run_events
+            .read()
+            .get(&run_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn list_active_workflow_run_ids(&self, workflow_id: &str) -> ServerResult<Vec<Uuid>> {
+        self.ensure_workflow_exists(workflow_id)?;
+        Ok(self
+            .workflow_runs
+            .read()
+            .values()
+            .filter(|run| run.workflow_id == workflow_id)
+            .filter(|run| {
+                matches!(
+                    run.status,
+                    WorkflowRunStatus::Running | WorkflowRunStatus::Suspended
+                )
+            })
+            .map(|run| run.run_id)
+            .collect())
     }
 
     pub fn complete_workflow_run_success(
@@ -288,6 +371,7 @@ impl RuntimeRegistry {
         record.updated_at = Utc::now();
         record.result = Some(result);
         record.error = None;
+        self.workflow_run_tasks.write().shift_remove(&run_id);
         Ok(record.clone())
     }
 
@@ -309,6 +393,7 @@ impl RuntimeRegistry {
         record.updated_at = Utc::now();
         record.error = Some(error.to_string());
         record.result = None;
+        self.workflow_run_tasks.write().shift_remove(&run_id);
         Ok(record.clone())
     }
 
@@ -352,6 +437,9 @@ impl RuntimeRegistry {
         }
 
         runs.shift_remove(&run_id);
+        self.workflow_run_tasks.write().shift_remove(&run_id);
+        self.workflow_run_events.write().shift_remove(&run_id);
+        self.workflow_run_channels.write().shift_remove(&run_id);
         Ok(())
     }
 
@@ -376,6 +464,9 @@ impl RuntimeRegistry {
         run.status = WorkflowRunStatus::Cancelled;
         run.updated_at = Utc::now();
         run.error = None;
+        if let Some(handle) = self.workflow_run_tasks.write().shift_remove(&run_id) {
+            handle.abort();
+        }
         Ok(run.clone())
     }
 

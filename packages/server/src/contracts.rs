@@ -434,6 +434,16 @@ pub struct ResumeWorkflowRunRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RestartWorkflowRunRequest {
+    #[serde(default)]
+    #[serde(alias = "requestContext")]
+    pub request_context: IndexMap<String, Value>,
+    #[serde(default)]
+    #[serde(alias = "tracingOptions")]
+    pub tracing_options: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkflowStreamStartEvent {
     pub run_id: String,
     pub workflow_id: String,
@@ -555,6 +565,11 @@ pub struct ResumeWorkflowRunResponse {
     pub message: String,
     #[serde(default)]
     pub run: Option<WorkflowRunRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowControlResponse {
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -12,11 +12,12 @@ pub use mastra_server::{
     GenerateMemoryThreadRef, GenerateResponse, GenerateStreamEvent, GenerateStreamFinishEvent,
     GenerateStreamStartEvent, GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent,
     GenerateStreamToolResultEvent, GetMemoryThreadResponse, GetWorkingMemoryResponse,
-    ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse, ResumeWorkflowRunRequest,
+    ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse,
+    RestartWorkflowRunRequest as ServerRestartWorkflowRunRequest, ResumeWorkflowRunRequest,
     ToolChoice, ToolChoiceMode, ToolSummary, UpdateWorkingMemoryInput, UsageStats,
-    WorkflowDetail, WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunStatus,
-    WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamStartEvent,
-    WorkflowStreamStepEvent, WorkflowSummary,
+    WorkflowControlResponse as ServerWorkflowControlResponse, WorkflowDetail,
+    WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunStatus, WorkflowStreamEvent,
+    WorkflowStreamFinishEvent, WorkflowStreamStartEvent, WorkflowStreamStepEvent, WorkflowSummary,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -114,6 +115,47 @@ pub struct ResumeWorkflowRunResponse {
     pub message: String,
     #[serde(default)]
     pub run: Option<WorkflowRunRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RestartWorkflowRunRequest {
+    #[serde(default)]
+    #[serde(rename = "requestContext", alias = "request_context")]
+    pub request_context: IndexMap<String, Value>,
+    #[serde(default)]
+    #[serde(rename = "tracingOptions", alias = "tracing_options")]
+    pub tracing_options: Option<Value>,
+}
+
+impl From<ServerRestartWorkflowRunRequest> for RestartWorkflowRunRequest {
+    fn from(value: ServerRestartWorkflowRunRequest) -> Self {
+        Self {
+            request_context: value.request_context,
+            tracing_options: value.tracing_options,
+        }
+    }
+}
+
+impl From<RestartWorkflowRunRequest> for ServerRestartWorkflowRunRequest {
+    fn from(value: RestartWorkflowRunRequest) -> Self {
+        Self {
+            request_context: value.request_context,
+            tracing_options: value.tracing_options,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowControlResponse {
+    pub message: String,
+}
+
+impl From<ServerWorkflowControlResponse> for WorkflowControlResponse {
+    fn from(value: ServerWorkflowControlResponse) -> Self {
+        Self {
+            message: value.message,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

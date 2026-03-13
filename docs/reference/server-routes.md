@@ -66,7 +66,13 @@ Current public route surface implemented by `mastra-server`.
 - `GET /api/workflows`
 - `GET /api/workflows/{workflow_id}`
 - `POST /api/workflows/{workflow_id}/create-run`
+- `POST /api/workflows/{workflow_id}/start?runId=...`
 - `POST /api/workflows/{workflow_id}/start-async`
+- `POST /api/workflows/{workflow_id}/observe?runId=...`
+- `POST /api/workflows/{workflow_id}/restart?runId=...`
+- `POST /api/workflows/{workflow_id}/restart-async?runId=...`
+- `POST /api/workflows/{workflow_id}/restart-all-active-workflow-runs`
+- `POST /api/workflows/{workflow_id}/restart-all-active-workflow-runs-async`
 - `POST /api/workflows/{workflow_id}/resume`
 - `POST /api/workflows/{workflow_id}/resume-async`
 - `POST /api/workflows/{workflow_id}/resume-stream`
@@ -75,6 +81,21 @@ Current public route surface implemented by `mastra-server`.
 - `GET /api/workflows/{workflow_id}/runs/{run_id}`
 - `DELETE /api/workflows/{workflow_id}/runs/{run_id}`
 - `POST /api/workflows/{workflow_id}/runs/{run_id}/cancel`
+
+### Start / Observe / Restart Notes
+
+- `start` requires `runId` in the query string and starts an existing stored
+  run in the background, returning `{ message }`.
+- `observe` requires `runId` in the query string and streams the run's cached
+  workflow events first, then live events from the current background task.
+- `start` reuses the stored run's `resource_id`; if the body omits
+  `inputData`, the server also reuses the stored `input_data`.
+- `restart` / `restart-async` currently restart the stored run using the last
+  persisted `input_data` and `resource_id`.
+- `restart-all-active-workflow-runs` and `...-async` target runs whose current
+  status is `running` or `suspended`.
+- `tracingOptions` is currently accepted only for wire compatibility; the Rust
+  runtime does not consume it yet.
 
 ### Resume Request Notes
 
@@ -89,11 +110,14 @@ Current public route surface implemented by `mastra-server`.
 
 ### Cancel Notes
 
-- `POST .../runs/{run_id}/cancel` currently updates the persisted run record to
+- `POST .../runs/{run_id}/cancel` updates the persisted run record to
   `Cancelled`.
-- It does not abort an already running async workflow task; this is still a
-  status-level compatibility route rather than a full upstream interruption
-  mechanism.
+- If the run was started through a background lifecycle route (`start`,
+  `restart`, `resume-stream`, or `stream`), the server also aborts the tracked
+  async task and emits a terminal workflow error event with
+  `"workflow run cancelled"`.
+- This is still narrower than upstream interruptibility because the Rust core
+  runtime has no step checkpoint or time-travel model.
 
 ## Misc
 
@@ -106,9 +130,8 @@ Current public route surface implemented by `mastra-server`.
 
 These upstream route families are still structural gaps in the Rust port:
 
-- workflow lifecycle routes such as `start`, `observe`, `restart`,
-  `restart-all-active`, and `time-travel-stream`
 - workflow time-travel
+- workflow time-travel stream routes
 - semantic recall / vector-backed memory
 - automatic working-memory / observational-memory processors
 - vectors

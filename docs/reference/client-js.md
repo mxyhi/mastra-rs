@@ -26,7 +26,13 @@ let thread_client = client.get_memory_thread(thread.thread.id.clone());
 ## Workflow Support
 
 - create run
+- start
 - start async
+- observe
+- restart
+- restart async
+- restart all active
+- restart all active async
 - resume
 - resume async
 - resume stream
@@ -35,6 +41,26 @@ let thread_client = client.get_memory_thread(thread.thread.id.clone());
 - list runs with filters
 - get run by id
 - delete run by id
+
+### Workflow Lifecycle Control Methods
+
+Current lifecycle methods mirror the current Rust server surface:
+
+- `WorkflowClient::start(run_id, request)` -> `{ message }`
+- `WorkflowClient::observe(run_id)` -> SSE `WorkflowStreamEvent`
+- `WorkflowClient::restart(run_id, request)` -> `{ message }`
+- `WorkflowClient::restart_async(run_id, request)` -> `StartWorkflowRunResponse`
+- `WorkflowClient::restart_all_active()` -> `{ message }`
+- `WorkflowClient::restart_all_active_async()` -> `{ message }`
+
+Notes:
+
+- `start` and `restart` send `runId` as a query parameter, matching the Rust
+  server's control-route shape.
+- `observe` consumes the same cached-first SSE stream exposed by
+  `/api/workflows/{workflow_id}/observe`.
+- `RestartWorkflowRunRequest.tracing_options` is currently only wire
+  compatibility state; the Rust runtime does not act on it yet.
 
 ## Memory Support
 

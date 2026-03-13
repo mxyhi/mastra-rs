@@ -17,16 +17,17 @@ use crate::{
         AgentDetailResponse, AppendMemoryMessagesRequest, AppendMemoryMessagesResponse,
         AppendObservationInput, CancelWorkflowRunResponse, CreateMemoryThreadRequest,
         CreateMemoryThreadResponse, CreateWorkflowRunRequest, DeleteMemoryMessagesRequest,
-        DeleteMemoryMessagesResponse, DeleteWorkflowRunResponse, ErrorResponse,
-        ExecuteToolRequest, ExecuteToolResponse, GenerateRequest, GenerateResponse,
-        GenerateStreamEvent, GetMemoryThreadResponse, GetWorkingMemoryResponse,
-        ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery,
-        ListObservationsQuery, ListObservationsResponse, ListThreadsQuery, ListThreadsResponse,
-        ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse,
-        ListWorkflowsResponse, MessageOrderBy, PaginationSizeValue, ResumeWorkflowRunRequest,
+        DeleteMemoryMessagesResponse, DeleteWorkflowRunResponse, ErrorResponse, ExecuteToolRequest,
+        ExecuteToolResponse, GenerateRequest, GenerateResponse, GenerateStreamEvent,
+        GetMemoryThreadResponse, GetWorkingMemoryResponse, ListAgentsResponse,
+        ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery, ListObservationsQuery,
+        ListObservationsResponse, ListThreadsQuery, ListThreadsResponse, ListToolsResponse,
+        ListWorkflowRunsQuery, ListWorkflowRunsResponse, ListWorkflowsResponse, MessageOrderBy,
+        PaginationSizeValue, RestartWorkflowRunRequest, ResumeWorkflowRunRequest,
         ResumeWorkflowRunResponse, StartWorkflowRunRequest, StartWorkflowRunResponse,
         SystemPackagesResponse, ThreadOrderBy, ToolSummary, UpdateMemoryThreadRequest,
-        UpdateWorkingMemoryInput, WorkflowDetailResponse, WorkflowRunRecord, WorkflowStreamEvent,
+        UpdateWorkingMemoryInput, WorkflowControlResponse, WorkflowDetailResponse,
+        WorkflowRunRecord, WorkflowStreamEvent,
     },
 };
 
@@ -507,6 +508,42 @@ impl WorkflowClient {
             .await
     }
 
+    pub async fn start(
+        &self,
+        run_id: impl std::fmt::Display,
+        request: StartWorkflowRunRequest,
+    ) -> Result<WorkflowControlResponse, MastraClientError> {
+        let query = [("runId", run_id.to_string())];
+        self.inner
+            .request_with_query(
+                Method::POST,
+                &format!("/workflows/{}/start", self.workflow_id),
+                Some(&query),
+                Some(&request),
+            )
+            .await
+    }
+
+    pub async fn observe(
+        &self,
+        run_id: impl std::fmt::Display,
+    ) -> Result<
+        impl Stream<Item = Result<WorkflowStreamEvent, MastraClientError>> + Send + 'static,
+        MastraClientError,
+    > {
+        let query = [("runId", run_id.to_string())];
+        let response = self
+            .inner
+            .stream_request_with_query(
+                Method::POST,
+                &format!("/workflows/{}/observe", self.workflow_id),
+                Some(&query),
+                Option::<&()>::None,
+            )
+            .await?;
+        Ok(decode_event_stream(response))
+    }
+
     pub async fn resume_async(
         &self,
         request: ResumeWorkflowRunRequest,
@@ -516,6 +553,66 @@ impl WorkflowClient {
                 Method::POST,
                 &format!("/workflows/{}/resume-async", self.workflow_id),
                 Some(&request),
+            )
+            .await
+    }
+
+    pub async fn restart_async(
+        &self,
+        run_id: impl std::fmt::Display,
+        request: RestartWorkflowRunRequest,
+    ) -> Result<StartWorkflowRunResponse, MastraClientError> {
+        let query = [("runId", run_id.to_string())];
+        self.inner
+            .request_with_query(
+                Method::POST,
+                &format!("/workflows/{}/restart-async", self.workflow_id),
+                Some(&query),
+                Some(&request),
+            )
+            .await
+    }
+
+    pub async fn restart(
+        &self,
+        run_id: impl std::fmt::Display,
+        request: RestartWorkflowRunRequest,
+    ) -> Result<WorkflowControlResponse, MastraClientError> {
+        let query = [("runId", run_id.to_string())];
+        self.inner
+            .request_with_query(
+                Method::POST,
+                &format!("/workflows/{}/restart", self.workflow_id),
+                Some(&query),
+                Some(&request),
+            )
+            .await
+    }
+
+    pub async fn restart_all_active_async(
+        &self,
+    ) -> Result<WorkflowControlResponse, MastraClientError> {
+        self.inner
+            .request(
+                Method::POST,
+                &format!(
+                    "/workflows/{}/restart-all-active-workflow-runs-async",
+                    self.workflow_id
+                ),
+                Option::<&()>::None,
+            )
+            .await
+    }
+
+    pub async fn restart_all_active(&self) -> Result<WorkflowControlResponse, MastraClientError> {
+        self.inner
+            .request(
+                Method::POST,
+                &format!(
+                    "/workflows/{}/restart-all-active-workflow-runs",
+                    self.workflow_id
+                ),
+                Option::<&()>::None,
             )
             .await
     }
@@ -870,11 +967,13 @@ impl MemoryThreadClient {
             .await
     }
 
-    pub async fn get_working_memory(
-        &self,
-    ) -> Result<GetWorkingMemoryResponse, MastraClientError> {
+    pub async fn get_working_memory(&self) -> Result<GetWorkingMemoryResponse, MastraClientError> {
         self.inner
-            .request(Method::GET, &self.working_memory_path(), Option::<&()>::None)
+            .request(
+                Method::GET,
+                &self.working_memory_path(),
+                Option::<&()>::None,
+            )
             .await
     }
 

@@ -18,18 +18,18 @@ pub use types::{
     GenerateMemoryThreadObject, GenerateMemoryThreadRef, GenerateRequest, GenerateResponse,
     GenerateStreamEvent, GenerateStreamFinishEvent, GenerateStreamStartEvent,
     GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent, GenerateStreamToolResultEvent,
-    GetWorkingMemoryResponse, ListAgentsResponse, ListMemoriesResponse,
-    ListMemoryMessagesResponse, ListMessagesQuery, ListObservationsQuery,
-    ListObservationsResponse, ListThreadsQuery, ListThreadsResponse, ListToolsResponse,
-    ListWorkflowRunsQuery, ListWorkflowRunsResponse, ListWorkflowsResponse, MemoryMessageInput,
-    MemoryMessageRole, MemorySummary, MessageOrderBy, MessageOrderField, OrderDirection,
-    PaginationSizeValue, ResumeWorkflowRunRequest, ResumeWorkflowRunResponse, RouteDescription,
-    StartWorkflowRunRequest, StartWorkflowRunResponse, SystemPackage, SystemPackagesResponse,
-    ThreadOrderBy, ThreadOrderField, ToolChoice, ToolChoiceMode, ToolSummary,
-    UpdateMemoryThreadRequest, UpdateWorkingMemoryInput, UsageStats, WorkflowDetail,
+    GetWorkingMemoryResponse, ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse,
+    ListMessagesQuery, ListObservationsQuery, ListObservationsResponse, ListThreadsQuery,
+    ListThreadsResponse, ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse,
+    ListWorkflowsResponse, MemoryMessageInput, MemoryMessageRole, MemorySummary, MessageOrderBy,
+    MessageOrderField, OrderDirection, PaginationSizeValue, RestartWorkflowRunRequest,
+    ResumeWorkflowRunRequest, ResumeWorkflowRunResponse, RouteDescription, StartWorkflowRunRequest,
+    StartWorkflowRunResponse, SystemPackage, SystemPackagesResponse, ThreadOrderBy,
+    ThreadOrderField, ToolChoice, ToolChoiceMode, ToolSummary, UpdateMemoryThreadRequest,
+    UpdateWorkingMemoryInput, UsageStats, WorkflowControlResponse, WorkflowDetail,
     WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunRef, WorkflowRunStatus,
-    WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamQuery,
-    WorkflowStreamStartEvent, WorkflowStreamStepEvent, WorkflowSummary,
+    WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamQuery, WorkflowStreamStartEvent,
+    WorkflowStreamStepEvent, WorkflowSummary,
 };
 
 #[cfg(test)]
@@ -56,9 +56,9 @@ mod tests {
         GenerateMemoryThreadRef, GenerateRequest, ListMessagesQuery, ListObservationsQuery,
         ListThreadsQuery, ListWorkflowRunsQuery, MastraClient, MastraClientBuilder,
         MastraClientError, MemoryMessageInput, MemoryMessageRole, MessageOrderBy,
-        MessageOrderField, OrderDirection, PaginationSizeValue, ResumeWorkflowRunRequest,
-        StartWorkflowRunRequest, ThreadOrderBy, ThreadOrderField, ToolChoice,
-        UpdateMemoryThreadRequest, UpdateWorkingMemoryInput, WorkflowRunStatus,
+        MessageOrderField, OrderDirection, PaginationSizeValue, RestartWorkflowRunRequest,
+        ResumeWorkflowRunRequest, StartWorkflowRunRequest, ThreadOrderBy, ThreadOrderField,
+        ToolChoice, UpdateMemoryThreadRequest, UpdateWorkingMemoryInput, WorkflowRunStatus,
     };
 
     struct TestHarness {
@@ -99,6 +99,16 @@ mod tests {
             server.register_workflow(Workflow::new("demo").then(Step::new(
                 "shape",
                 |input, _context| async move {
+                    Ok(json!({
+                        "accepted": true,
+                        "input": input,
+                    }))
+                },
+            )));
+            server.register_workflow(Workflow::new("slow").then(Step::new(
+                "wait",
+                |input, _context| async move {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
                     Ok(json!({
                         "accepted": true,
                         "input": input,
@@ -679,6 +689,156 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn supports_workflow_lifecycle_control_routes() {
+        let harness = TestHarness::spawn().await;
+        let client = MastraClientBuilder::new(harness.base_url.clone())
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap();
+
+        let created = client
+            .workflow("demo")
+            .create_run(CreateWorkflowRunRequest {
+                run_id: None,
+                resource_id: Some("resource-control".to_owned()),
+                input_data: Some(json!({"topic": "draft"})),
+                request_context: Default::default(),
+            })
+            .await
+            .unwrap();
+
+        let started = client
+            .workflow("demo")
+            .start(
+                created.run_id,
+                StartWorkflowRunRequest {
+                    resource_id: None,
+                    input_data: None,
+                    request_context: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(started.message, "Workflow run started");
+
+        let observed = client
+            .workflow("demo")
+            .observe(created.run_id)
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        assert!(
+            observed
+                .iter()
+                .any(|event| matches!(event, Ok(crate::WorkflowStreamEvent::Start(_))))
+        );
+        assert!(
+            observed
+                .iter()
+                .any(|event| matches!(event, Ok(crate::WorkflowStreamEvent::Finish(_))))
+        );
+
+        let restarted = client
+            .workflow("demo")
+            .restart_async(
+                created.run_id,
+                RestartWorkflowRunRequest {
+                    request_context: Default::default(),
+                    tracing_options: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(restarted.run.status, WorkflowRunStatus::Success);
+
+        let restart_message = client
+            .workflow("demo")
+            .restart(
+                created.run_id,
+                RestartWorkflowRunRequest {
+                    request_context: Default::default(),
+                    tracing_options: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(restart_message.message, "Workflow run restarted");
+
+        let slow_run_a = client
+            .workflow("slow")
+            .create_run(CreateWorkflowRunRequest {
+                run_id: None,
+                resource_id: Some("resource-slow-a".to_owned()),
+                input_data: Some(json!({"topic": "slow-a"})),
+                request_context: Default::default(),
+            })
+            .await
+            .unwrap();
+        client
+            .workflow("slow")
+            .start(
+                slow_run_a.run_id,
+                StartWorkflowRunRequest {
+                    resource_id: None,
+                    input_data: None,
+                    request_context: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let restart_all_async = client
+            .workflow("slow")
+            .restart_all_active_async()
+            .await
+            .unwrap();
+        assert_eq!(
+            restart_all_async.message,
+            "All active workflow runs restarted"
+        );
+
+        let slow_run_b = client
+            .workflow("slow")
+            .create_run(CreateWorkflowRunRequest {
+                run_id: None,
+                resource_id: Some("resource-slow-b".to_owned()),
+                input_data: Some(json!({"topic": "slow-b"})),
+                request_context: Default::default(),
+            })
+            .await
+            .unwrap();
+        client
+            .workflow("slow")
+            .start(
+                slow_run_b.run_id,
+                StartWorkflowRunRequest {
+                    resource_id: None,
+                    input_data: None,
+                    request_context: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let restart_all = client.workflow("slow").restart_all_active().await.unwrap();
+        assert_eq!(restart_all.message, "All active workflow runs restarted");
+
+        let final_events = client
+            .workflow("slow")
+            .observe(slow_run_b.run_id)
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        assert!(
+            final_events
+                .iter()
+                .any(|event| matches!(event, Ok(crate::WorkflowStreamEvent::Finish(_))))
+        );
+    }
+
+    #[tokio::test]
     async fn supports_top_level_collection_and_default_memory_convenience_methods() {
         let harness = TestHarness::spawn().await;
         let client = MastraClientBuilder::new(harness.base_url.clone())
@@ -694,7 +854,19 @@ mod tests {
         );
 
         let workflows = client.list_workflows().await.unwrap();
-        assert_eq!(workflows.workflows.len(), 1);
+        assert_eq!(workflows.workflows.len(), 2);
+        assert!(
+            workflows
+                .workflows
+                .iter()
+                .any(|workflow| workflow.id == "demo")
+        );
+        assert!(
+            workflows
+                .workflows
+                .iter()
+                .any(|workflow| workflow.id == "slow")
+        );
         assert_eq!(
             client
                 .get_workflow("demo")
@@ -807,9 +979,7 @@ mod tests {
                     resource_id: Some("resource-memory".to_owned()),
                     scope: Some(MemoryScope::Thread),
                     content: "User likes Rust".to_owned(),
-                    observed_message_ids: vec![
-                        "00000000-0000-7000-8000-000000000001".to_owned()
-                    ],
+                    observed_message_ids: vec!["00000000-0000-7000-8000-000000000001".to_owned()],
                     metadata: json!({ "kind": "summary" }),
                 },
             )
@@ -830,7 +1000,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(serde_json::to_value(&observations.per_page).unwrap(), json!(false));
+        assert_eq!(
+            serde_json::to_value(&observations.per_page).unwrap(),
+            json!(false)
+        );
         assert_eq!(observations.observations.len(), 1);
         assert_eq!(observations.observations[0].content, "User likes Rust");
     }

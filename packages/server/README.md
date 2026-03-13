@@ -53,9 +53,8 @@ This is still a simplified Rust port: the CLI path now loads project graphs end 
 
 This crate does not yet provide the larger upstream control plane:
 
-- workflow lifecycle routes such as `start`, `observe`, `restart`,
-  `restart-all-active`, and `time-travel-stream`
 - workflow time-travel
+- workflow time-travel stream routes
 - semantic recall
 - vector routes
 - logs routes
@@ -68,9 +67,15 @@ This crate does not yet provide the larger upstream control plane:
 
 The Rust server now exposes the main upstream workflow lifecycle routes:
 
+- `POST /api/workflows/{workflow_id}/start?runId=...`
 - `POST /api/workflows/{workflow_id}/resume`
 - `POST /api/workflows/{workflow_id}/resume-async`
 - `POST /api/workflows/{workflow_id}/resume-stream`
+- `POST /api/workflows/{workflow_id}/observe?runId=...`
+- `POST /api/workflows/{workflow_id}/restart?runId=...`
+- `POST /api/workflows/{workflow_id}/restart-async?runId=...`
+- `POST /api/workflows/{workflow_id}/restart-all-active-workflow-runs`
+- `POST /api/workflows/{workflow_id}/restart-all-active-workflow-runs-async`
 - `POST /api/workflows/{workflow_id}/runs/{run_id}/cancel`
 
 Current resume semantics are intentionally simple: the server restarts the
@@ -80,9 +85,21 @@ otherwise it reuses the last persisted `input_data`.
 The request contract still accepts an optional `step` field for wire
 compatibility, but the current Rust runtime ignores it during resume.
 
-Current cancel semantics are also intentionally narrow: the cancel route marks
-the stored run record as `Cancelled`, but it does not abort an already running
-workflow task.
+Current `start` / `observe` / `restart*` semantics are still intentionally
+simple compared with upstream:
+
+- `start` and `restart` are control routes that return `{ message }` after
+  scheduling a background task
+- `observe` replays cached workflow events first and then tails the live event
+  channel for the run
+- `restart*` reuses the stored run's last `resource_id` and `input_data`
+- `restart-all-active*` only targets runs currently marked `Running` or
+  `Suspended`
+
+Current cancel semantics are still narrower than upstream time-travel capable
+engines, but no longer status-only: the cancel route marks the stored run
+record as `Cancelled` and aborts a tracked background workflow task when one is
+registered.
 
 ## Working Memory And Observations
 

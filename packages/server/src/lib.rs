@@ -20,12 +20,13 @@ pub use contracts::{
     GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent, GenerateStreamToolResultEvent,
     GetMemoryThreadResponse, GetWorkingMemoryResponse, ListObservationsQuery,
     ListObservationsResponse, ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse,
-    ResumeWorkflowRunRequest, ResumeWorkflowRunResponse,
+    RestartWorkflowRunRequest, ResumeWorkflowRunRequest, ResumeWorkflowRunResponse,
     RouteDescription, StartWorkflowRunResponse as WorkflowRunResponse, SystemPackage,
     SystemPackagesResponse, ToolChoice, ToolChoiceMode, ToolSummary, UpdateMemoryThreadRequest,
-    UpdateWorkingMemoryInput, UsageStats, WorkflowDetail, WorkflowDetailResponse,
-    WorkflowRunRecord, WorkflowRunStatus, WorkflowStepSummary, WorkflowStreamEvent,
-    WorkflowStreamFinishEvent, WorkflowStreamStartEvent, WorkflowStreamStepEvent, WorkflowSummary,
+    UpdateWorkingMemoryInput, UsageStats, WorkflowControlResponse, WorkflowDetail,
+    WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunStatus, WorkflowStepSummary,
+    WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamStartEvent,
+    WorkflowStreamStepEvent, WorkflowSummary,
 };
 pub use error::ServerError as MastraServerError;
 pub use registry::RuntimeRegistry as MastraRuntimeRegistry;
