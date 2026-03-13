@@ -11,9 +11,12 @@ use axum::{
 use chrono::Utc;
 use futures::StreamExt;
 use mastra_core::{
-    Agent, CloneThreadRequest, CreateThreadRequest, MemoryEngine, MemoryMessage,
-    MemoryMessageOrder, MemoryMessageOrderField, MemoryOrderDirection, MemoryRecallRequest,
-    MemoryThreadOrder, MemoryThreadOrderField, Tool, UpdateThreadRequest, Workflow,
+    Agent, AppendObservationRequest as CoreAppendObservationRequest, CloneThreadRequest,
+    CreateThreadRequest, MemoryEngine, MemoryMessage, MemoryMessageOrder,
+    MemoryMessageOrderField, MemoryOrderDirection, MemoryRecallRequest, MemoryScope,
+    MemoryThreadOrder, MemoryThreadOrderField, ObservationQuery, Tool,
+    UpdateThreadRequest, UpdateWorkingMemoryRequest as CoreUpdateWorkingMemoryRequest, Workflow,
+    WorkingMemoryFormat,
 };
 use tracing::instrument;
 use uuid::Uuid;
@@ -21,19 +24,22 @@ use uuid::Uuid;
 use crate::{
     contracts::{
         AgentDetailResponse, AppendMemoryMessagesRequest, AppendMemoryMessagesResponse,
-        CancelWorkflowRunResponse, CloneMemoryThreadRequest, CloneMemoryThreadResponse,
-        CreateMemoryThreadRequest, CreateMemoryThreadResponse, CreateWorkflowRunRequest,
-        DeleteMemoryMessagesRequest, DeleteMemoryMessagesResponse, DeleteWorkflowRunResponse,
-        ErrorResponse, ExecuteToolRequest, ExecuteToolResponse, GenerateRequest,
-        GenerateStreamEvent, GetMemoryThreadResponse, ListAgentsResponse, ListMemoriesResponse,
-        ListMemoryMessagesResponse, ListMessagesQuery, ListThreadsQuery, ListThreadsResponse,
-        ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse, ListWorkflowsResponse,
-        MessageOrderBy, MessageOrderField, OrderDirection, ResumeWorkflowRunRequest,
+        AppendObservationInput, CancelWorkflowRunResponse, CloneMemoryThreadRequest,
+        CloneMemoryThreadResponse, CreateMemoryThreadRequest, CreateMemoryThreadResponse,
+        CreateWorkflowRunRequest, DeleteMemoryMessagesRequest, DeleteMemoryMessagesResponse,
+        DeleteWorkflowRunResponse, ErrorResponse, ExecuteToolRequest, ExecuteToolResponse,
+        GenerateRequest, GenerateStreamEvent, GetMemoryThreadResponse,
+        GetWorkingMemoryResponse, ListAgentsResponse, ListMemoriesResponse,
+        ListMemoryMessagesResponse, ListMessagesQuery, ListObservationsQuery,
+        ListObservationsResponse, ListThreadsQuery, ListThreadsResponse, ListToolsResponse,
+        ListWorkflowRunsQuery, ListWorkflowRunsResponse, ListWorkflowsResponse, MessageOrderBy,
+        MessageOrderField, OrderDirection, ResumeWorkflowRunRequest,
         ResumeWorkflowRunResponse, RouteDescription, StartWorkflowRunRequest,
         StartWorkflowRunResponse, SystemPackage, SystemPackagesResponse, ThreadOrderBy,
-        ThreadOrderField, UpdateMemoryThreadRequest, WorkflowDetailResponse, WorkflowRunRecord,
-        WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamQuery,
-        WorkflowStreamStartEvent, WorkflowStreamStepEvent,
+        ThreadOrderField, UpdateMemoryThreadRequest, UpdateWorkingMemoryInput,
+        WorkflowDetailResponse, WorkflowRunRecord, WorkflowStreamEvent,
+        WorkflowStreamFinishEvent, WorkflowStreamQuery, WorkflowStreamStartEvent,
+        WorkflowStreamStepEvent,
     },
     error::{ServerError, ServerResult},
     registry::RuntimeRegistry,
@@ -136,6 +142,14 @@ impl MastraServer {
                     .delete(delete_default_memory_thread),
             )
             .route(
+                "/memory/threads/{thread_id}/working-memory",
+                get(get_default_working_memory).put(update_default_working_memory),
+            )
+            .route(
+                "/memory/threads/{thread_id}/observations",
+                get(list_default_memory_observations).post(append_default_memory_observation),
+            )
+            .route(
                 "/memory/threads/{thread_id}/clone",
                 post(clone_default_memory_thread),
             )
@@ -156,6 +170,14 @@ impl MastraServer {
                 get(get_memory_thread)
                     .patch(update_memory_thread)
                     .delete(delete_memory_thread),
+            )
+            .route(
+                "/memory/{memory_id}/threads/{thread_id}/working-memory",
+                get(get_memory_working_memory).put(update_memory_working_memory),
+            )
+            .route(
+                "/memory/{memory_id}/threads/{thread_id}/observations",
+                get(list_memory_observations).post(append_memory_observation),
             )
             .route(
                 "/memory/{memory_id}/threads/{thread_id}/clone",
@@ -271,6 +293,26 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
             "Delete a memory thread",
         ),
         (
+            "GET",
+            "/memory/threads/{thread_id}/working-memory",
+            "Get working memory for a thread",
+        ),
+        (
+            "PUT",
+            "/memory/threads/{thread_id}/working-memory",
+            "Update working memory for a thread",
+        ),
+        (
+            "GET",
+            "/memory/threads/{thread_id}/observations",
+            "List observations for a thread",
+        ),
+        (
+            "POST",
+            "/memory/threads/{thread_id}/observations",
+            "Append an observation to a thread",
+        ),
+        (
             "POST",
             "/memory/threads/{thread_id}/clone",
             "Clone a memory thread",
@@ -310,6 +352,26 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
             "DELETE",
             "/memory/{memory_id}/threads/{thread_id}",
             "Delete a memory thread",
+        ),
+        (
+            "GET",
+            "/memory/{memory_id}/threads/{thread_id}/working-memory",
+            "Get working memory for a thread",
+        ),
+        (
+            "PUT",
+            "/memory/{memory_id}/threads/{thread_id}/working-memory",
+            "Update working memory for a thread",
+        ),
+        (
+            "GET",
+            "/memory/{memory_id}/threads/{thread_id}/observations",
+            "List observations for a thread",
+        ),
+        (
+            "POST",
+            "/memory/{memory_id}/threads/{thread_id}/observations",
+            "Append an observation to a thread",
         ),
         (
             "POST",
@@ -717,6 +779,170 @@ async fn update_memory_thread_for(
         .map_err(ServerError::internal)?;
 
     Ok(Json(GetMemoryThreadResponse { thread }))
+}
+
+#[instrument(skip(state))]
+async fn get_default_working_memory(
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
+) -> ServerResult<Json<GetWorkingMemoryResponse>> {
+    let memory = state.registry.find_default_memory()?;
+    get_working_memory_for(memory, thread_id).await
+}
+
+#[instrument(skip(state))]
+async fn get_memory_working_memory(
+    State(state): State<AppState>,
+    Path((memory_id, thread_id)): Path<(String, String)>,
+) -> ServerResult<Json<GetWorkingMemoryResponse>> {
+    let memory = state.registry.find_memory(&memory_id)?;
+    get_working_memory_for(memory, thread_id).await
+}
+
+async fn get_working_memory_for(
+    memory: Arc<dyn MemoryEngine>,
+    thread_id: String,
+) -> ServerResult<Json<GetWorkingMemoryResponse>> {
+    let working_memory = memory
+        .get_working_memory(&thread_id, None)
+        .await
+        .map_err(ServerError::internal)?;
+
+    Ok(Json(GetWorkingMemoryResponse { working_memory }))
+}
+
+#[instrument(skip(state, request))]
+async fn update_default_working_memory(
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
+    Json(request): Json<UpdateWorkingMemoryInput>,
+) -> ServerResult<Json<GetWorkingMemoryResponse>> {
+    let memory = state.registry.find_default_memory()?;
+    update_working_memory_for(memory, thread_id, request).await
+}
+
+#[instrument(skip(state, request))]
+async fn update_memory_working_memory(
+    State(state): State<AppState>,
+    Path((memory_id, thread_id)): Path<(String, String)>,
+    Json(request): Json<UpdateWorkingMemoryInput>,
+) -> ServerResult<Json<GetWorkingMemoryResponse>> {
+    let memory = state.registry.find_memory(&memory_id)?;
+    update_working_memory_for(memory, thread_id, request).await
+}
+
+async fn update_working_memory_for(
+    memory: Arc<dyn MemoryEngine>,
+    thread_id: String,
+    request: UpdateWorkingMemoryInput,
+) -> ServerResult<Json<GetWorkingMemoryResponse>> {
+    let working_memory = memory
+        .update_working_memory(CoreUpdateWorkingMemoryRequest {
+            thread_id,
+            resource_id: request.resource_id,
+            scope: request.scope.unwrap_or(MemoryScope::Thread),
+            format: request.format.unwrap_or_else(|| {
+                if request.content.is_string() {
+                    WorkingMemoryFormat::Markdown
+                } else {
+                    WorkingMemoryFormat::Json
+                }
+            }),
+            template: request.template,
+            content: request.content,
+        })
+        .await
+        .map_err(ServerError::internal)?;
+
+    Ok(Json(GetWorkingMemoryResponse {
+        working_memory: Some(working_memory),
+    }))
+}
+
+#[instrument(skip(state))]
+async fn list_default_memory_observations(
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
+    Query(query): Query<ListObservationsQuery>,
+) -> ServerResult<Json<ListObservationsResponse>> {
+    let memory = state.registry.find_default_memory()?;
+    list_memory_observations_for(memory, thread_id, query).await
+}
+
+#[instrument(skip(state))]
+async fn list_memory_observations(
+    State(state): State<AppState>,
+    Path((memory_id, thread_id)): Path<(String, String)>,
+    Query(query): Query<ListObservationsQuery>,
+) -> ServerResult<Json<ListObservationsResponse>> {
+    let memory = state.registry.find_memory(&memory_id)?;
+    list_memory_observations_for(memory, thread_id, query).await
+}
+
+async fn list_memory_observations_for(
+    memory: Arc<dyn MemoryEngine>,
+    thread_id: String,
+    query: ListObservationsQuery,
+) -> ServerResult<Json<ListObservationsResponse>> {
+    let per_page = query.parsed_per_page().map_err(ServerError::BadRequest)?;
+    let observations = memory
+        .list_observations(ObservationQuery {
+            thread_id,
+            resource_id: query.resource_id.clone(),
+            scope: query.scope,
+            page: query.page,
+            per_page,
+        })
+        .await
+        .map_err(ServerError::internal)?;
+
+    Ok(Json(ListObservationsResponse {
+        observations: observations.observations,
+        total: observations.total,
+        page: observations.page,
+        per_page: query.response_per_page(observations.per_page),
+        has_more: observations.has_more,
+    }))
+}
+
+#[instrument(skip(state, request))]
+async fn append_default_memory_observation(
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
+    Json(request): Json<AppendObservationInput>,
+) -> ServerResult<Json<mastra_core::ObservationRecord>> {
+    let memory = state.registry.find_default_memory()?;
+    append_memory_observation_for(memory, thread_id, request).await
+}
+
+#[instrument(skip(state, request))]
+async fn append_memory_observation(
+    State(state): State<AppState>,
+    Path((memory_id, thread_id)): Path<(String, String)>,
+    Json(request): Json<AppendObservationInput>,
+) -> ServerResult<Json<mastra_core::ObservationRecord>> {
+    let memory = state.registry.find_memory(&memory_id)?;
+    append_memory_observation_for(memory, thread_id, request).await
+}
+
+async fn append_memory_observation_for(
+    memory: Arc<dyn MemoryEngine>,
+    thread_id: String,
+    request: AppendObservationInput,
+) -> ServerResult<Json<mastra_core::ObservationRecord>> {
+    let observation = memory
+        .append_observation(CoreAppendObservationRequest {
+            thread_id,
+            resource_id: request.resource_id,
+            scope: request.scope.unwrap_or(MemoryScope::Thread),
+            content: request.content,
+            observed_message_ids: request.observed_message_ids,
+            metadata: request.metadata,
+        })
+        .await
+        .map_err(ServerError::internal)?;
+
+    Ok(Json(observation))
 }
 
 #[instrument(skip(state))]
@@ -1385,10 +1611,12 @@ mod tests {
     use chrono::Utc;
     use futures::{StreamExt, stream::BoxStream};
     use mastra_core::{
-        Agent, AgentConfig, CloneThreadRequest, CreateThreadRequest,
-        FinishReason as CoreFinishReason, MemoryConfig, MemoryEngine, MemoryMessage,
-        MemoryRecallRequest, MemoryRole, ModelRequest, ModelResponse, ModelToolCall, StaticModel,
-        Thread, Tool, UpdateThreadRequest,
+        Agent, AgentConfig, AppendObservationRequest as CoreAppendObservationRequest,
+        CloneThreadRequest, CreateThreadRequest, FinishReason as CoreFinishReason, MemoryConfig,
+        MemoryEngine, MemoryMessage, MemoryRecallRequest, MemoryRole, ModelRequest,
+        ModelResponse, ModelToolCall, ObservationPage, ObservationQuery, ObservationRecord,
+        StaticModel, Thread, Tool, UpdateThreadRequest,
+        UpdateWorkingMemoryRequest as CoreUpdateWorkingMemoryRequest, WorkingMemoryState,
     };
     use parking_lot::RwLock;
     use serde_json::{Value, json};
@@ -1510,6 +1738,8 @@ mod tests {
     struct TestMemory {
         threads: RwLock<HashMap<String, Thread>>,
         messages: RwLock<HashMap<String, Vec<MemoryMessage>>>,
+        working_memory: RwLock<HashMap<String, WorkingMemoryState>>,
+        observations: RwLock<HashMap<String, Vec<ObservationRecord>>>,
     }
 
     #[async_trait]
@@ -1635,6 +1865,75 @@ mod tests {
                 messages = messages[start..].to_vec();
             }
             Ok(messages)
+        }
+
+        async fn get_working_memory(
+            &self,
+            thread_id: &str,
+            _resource_id: Option<&str>,
+        ) -> mastra_core::Result<Option<WorkingMemoryState>> {
+            Ok(self.working_memory.read().get(thread_id).cloned())
+        }
+
+        async fn update_working_memory(
+            &self,
+            request: CoreUpdateWorkingMemoryRequest,
+        ) -> mastra_core::Result<WorkingMemoryState> {
+            let state = WorkingMemoryState {
+                thread_id: request.thread_id.clone(),
+                resource_id: request.resource_id.clone(),
+                scope: request.scope,
+                format: request.format,
+                template: request.template,
+                content: request.content,
+                updated_at: Utc::now(),
+            };
+            self.working_memory
+                .write()
+                .insert(request.thread_id.clone(), state.clone());
+            Ok(state)
+        }
+
+        async fn list_observations(
+            &self,
+            request: ObservationQuery,
+        ) -> mastra_core::Result<ObservationPage> {
+            let observations = self
+                .observations
+                .read()
+                .get(&request.thread_id)
+                .cloned()
+                .unwrap_or_default();
+            Ok(ObservationPage {
+                total: observations.len(),
+                page: request.page.unwrap_or(0),
+                per_page: request.per_page.unwrap_or_else(|| observations.len().max(1)),
+                has_more: false,
+                observations,
+            })
+        }
+
+        async fn append_observation(
+            &self,
+            request: CoreAppendObservationRequest,
+        ) -> mastra_core::Result<ObservationRecord> {
+            let observation = ObservationRecord {
+                id: Uuid::now_v7().to_string(),
+                thread_id: request.thread_id.clone(),
+                resource_id: request.resource_id.clone(),
+                scope: request.scope,
+                content: request.content,
+                observed_message_ids: request.observed_message_ids,
+                metadata: request.metadata,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            };
+            self.observations
+                .write()
+                .entry(request.thread_id)
+                .or_default()
+                .push(observation.clone());
+            Ok(observation)
         }
 
         async fn clone_thread(&self, request: CloneThreadRequest) -> mastra_core::Result<Thread> {
@@ -3259,6 +3558,127 @@ mod tests {
         assert_eq!(update_payload["thread"]["metadata"]["scope"], "after");
         assert_eq!(update_payload["thread"]["created_at"], created_at);
         assert!(update_payload["thread"]["updated_at"].is_string());
+    }
+
+    #[tokio::test]
+    async fn exposes_working_memory_and_observation_routes_for_default_memory() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_memory("default", Arc::new(TestMemory::default()));
+        let router = server.into_router();
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/threads")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-memory",
+                            "title": "Memory thread",
+                            "metadata": {}
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let create_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let create_payload: Value = serde_json::from_slice(&create_body).unwrap();
+        let thread_id = create_payload["thread"]["id"].as_str().unwrap().to_owned();
+
+        let update_working_memory = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/memory/threads/{thread_id}/working-memory"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-memory",
+                            "scope": "thread",
+                            "format": "json",
+                            "template": "# User Profile",
+                            "content": { "name": "Sam" }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(update_working_memory.status(), StatusCode::OK);
+        let update_body = to_bytes(update_working_memory.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let update_payload: Value = serde_json::from_slice(&update_body).unwrap();
+        assert_eq!(update_payload["working_memory"]["content"]["name"], "Sam");
+        assert_eq!(update_payload["working_memory"]["format"], "json");
+
+        let fetch_working_memory = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/memory/threads/{thread_id}/working-memory"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fetch_working_memory.status(), StatusCode::OK);
+        let fetch_body = to_bytes(fetch_working_memory.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let fetch_payload: Value = serde_json::from_slice(&fetch_body).unwrap();
+        assert_eq!(fetch_payload["working_memory"]["template"], "# User Profile");
+
+        let append_observation = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/memory/threads/{thread_id}/observations"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-memory",
+                            "scope": "thread",
+                            "content": "User likes Rust",
+                            "observedMessageIds": ["00000000-0000-7000-8000-000000000001"],
+                            "metadata": { "kind": "summary" }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(append_observation.status(), StatusCode::OK);
+
+        let list_observations = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/memory/threads/{thread_id}/observations?resourceId=resource-memory&perPage=false"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list_observations.status(), StatusCode::OK);
+        let list_body = to_bytes(list_observations.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_payload: Value = serde_json::from_slice(&list_body).unwrap();
+        assert_eq!(list_payload["observations"].as_array().unwrap().len(), 1);
+        assert_eq!(list_payload["observations"][0]["content"], "User likes Rust");
+        assert_eq!(list_payload["per_page"], false);
     }
 
     #[tokio::test]

@@ -1,20 +1,22 @@
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
-use mastra_core::{MemoryMessage, Thread};
+use mastra_core::{MemoryMessage, MemoryScope, ObservationRecord, Thread};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
 pub use mastra_server::{
-    AgentDetail, AgentDetailResponse, AgentMessages, AgentSummary, ChatMessage, ErrorResponse,
-    ExecuteToolRequest, ExecuteToolResponse, FinishReason, GenerateMemoryConfig,
-    GenerateMemoryOptions, GenerateMemoryThreadObject, GenerateMemoryThreadRef, GenerateResponse,
-    GenerateStreamEvent, GenerateStreamFinishEvent, GenerateStreamStartEvent,
-    GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent, GenerateStreamToolResultEvent,
-    GetMemoryThreadResponse, ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse,
-    ResumeWorkflowRunRequest, ToolChoice, ToolChoiceMode, ToolSummary, UsageStats, WorkflowDetail,
-    WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunStatus, WorkflowStreamEvent,
-    WorkflowStreamFinishEvent, WorkflowStreamStartEvent, WorkflowStreamStepEvent, WorkflowSummary,
+    AgentDetail, AgentDetailResponse, AgentMessages, AgentSummary, AppendObservationInput,
+    ChatMessage, ErrorResponse, ExecuteToolRequest, ExecuteToolResponse, FinishReason,
+    GenerateMemoryConfig, GenerateMemoryOptions, GenerateMemoryThreadObject,
+    GenerateMemoryThreadRef, GenerateResponse, GenerateStreamEvent, GenerateStreamFinishEvent,
+    GenerateStreamStartEvent, GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent,
+    GenerateStreamToolResultEvent, GetMemoryThreadResponse, GetWorkingMemoryResponse,
+    ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse, ResumeWorkflowRunRequest,
+    ToolChoice, ToolChoiceMode, ToolSummary, UpdateWorkingMemoryInput, UsageStats,
+    WorkflowDetail, WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunStatus,
+    WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamStartEvent,
+    WorkflowStreamStepEvent, WorkflowSummary,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -280,6 +282,30 @@ pub struct ListMessagesQuery {
     #[serde(default)]
     #[serde(rename = "orderBy")]
     pub order_by: Option<MessageOrderBy>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ListObservationsResponse {
+    pub observations: Vec<ObservationRecord>,
+    pub total: usize,
+    pub page: usize,
+    pub per_page: PaginationSizeValue,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListObservationsQuery {
+    #[serde(default)]
+    #[serde(rename = "page")]
+    pub page: Option<usize>,
+    #[serde(default)]
+    #[serde(rename = "perPage")]
+    pub per_page: Option<String>,
+    #[serde(default)]
+    #[serde(rename = "resourceId")]
+    pub resource_id: Option<String>,
+    #[serde(default)]
+    pub scope: Option<MemoryScope>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

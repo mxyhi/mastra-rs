@@ -15,16 +15,18 @@ use crate::{
     MastraClientError,
     types::{
         AgentDetailResponse, AppendMemoryMessagesRequest, AppendMemoryMessagesResponse,
-        CancelWorkflowRunResponse, CreateMemoryThreadRequest, CreateMemoryThreadResponse,
-        CreateWorkflowRunRequest, DeleteMemoryMessagesRequest, DeleteMemoryMessagesResponse,
-        DeleteWorkflowRunResponse, ErrorResponse, ExecuteToolRequest, ExecuteToolResponse,
-        GenerateRequest, GenerateResponse, GenerateStreamEvent, GetMemoryThreadResponse,
+        AppendObservationInput, CancelWorkflowRunResponse, CreateMemoryThreadRequest,
+        CreateMemoryThreadResponse, CreateWorkflowRunRequest, DeleteMemoryMessagesRequest,
+        DeleteMemoryMessagesResponse, DeleteWorkflowRunResponse, ErrorResponse,
+        ExecuteToolRequest, ExecuteToolResponse, GenerateRequest, GenerateResponse,
+        GenerateStreamEvent, GetMemoryThreadResponse, GetWorkingMemoryResponse,
         ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery,
-        ListThreadsQuery, ListThreadsResponse, ListToolsResponse, ListWorkflowRunsQuery,
-        ListWorkflowRunsResponse, ListWorkflowsResponse, MessageOrderBy, PaginationSizeValue,
-        ResumeWorkflowRunRequest, ResumeWorkflowRunResponse, StartWorkflowRunRequest,
-        StartWorkflowRunResponse, SystemPackagesResponse, ThreadOrderBy, ToolSummary,
-        UpdateMemoryThreadRequest, WorkflowDetailResponse, WorkflowRunRecord, WorkflowStreamEvent,
+        ListObservationsQuery, ListObservationsResponse, ListThreadsQuery, ListThreadsResponse,
+        ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse,
+        ListWorkflowsResponse, MessageOrderBy, PaginationSizeValue, ResumeWorkflowRunRequest,
+        ResumeWorkflowRunResponse, StartWorkflowRunRequest, StartWorkflowRunResponse,
+        SystemPackagesResponse, ThreadOrderBy, ToolSummary, UpdateMemoryThreadRequest,
+        UpdateWorkingMemoryInput, WorkflowDetailResponse, WorkflowRunRecord, WorkflowStreamEvent,
     },
 };
 
@@ -718,6 +720,44 @@ impl MemoryClient {
         self.thread(thread_id).append_messages(request).await
     }
 
+    pub async fn get_working_memory(
+        &self,
+        thread_id: &str,
+    ) -> Result<GetWorkingMemoryResponse, MastraClientError> {
+        self.thread(thread_id).get_working_memory().await
+    }
+
+    pub async fn update_working_memory(
+        &self,
+        thread_id: &str,
+        request: UpdateWorkingMemoryInput,
+    ) -> Result<GetWorkingMemoryResponse, MastraClientError> {
+        self.thread(thread_id).update_working_memory(request).await
+    }
+
+    pub async fn observations(
+        &self,
+        thread_id: &str,
+    ) -> Result<ListObservationsResponse, MastraClientError> {
+        self.thread(thread_id).observations().await
+    }
+
+    pub async fn observations_with_query(
+        &self,
+        thread_id: &str,
+        query: ListObservationsQuery,
+    ) -> Result<ListObservationsResponse, MastraClientError> {
+        self.thread(thread_id).observations_with_query(query).await
+    }
+
+    pub async fn append_observation(
+        &self,
+        thread_id: &str,
+        request: AppendObservationInput,
+    ) -> Result<mastra_core::ObservationRecord, MastraClientError> {
+        self.thread(thread_id).append_observation(request).await
+    }
+
     pub async fn messages(
         &self,
         thread_id: &str,
@@ -783,6 +823,14 @@ impl MemoryThreadClient {
         format!("{}/messages", self.thread_path())
     }
 
+    fn working_memory_path(&self) -> String {
+        format!("{}/working-memory", self.thread_path())
+    }
+
+    fn observations_path(&self) -> String {
+        format!("{}/observations", self.thread_path())
+    }
+
     fn clone_path(&self) -> String {
         format!("{}/clone", self.thread_path())
     }
@@ -822,6 +870,23 @@ impl MemoryThreadClient {
             .await
     }
 
+    pub async fn get_working_memory(
+        &self,
+    ) -> Result<GetWorkingMemoryResponse, MastraClientError> {
+        self.inner
+            .request(Method::GET, &self.working_memory_path(), Option::<&()>::None)
+            .await
+    }
+
+    pub async fn update_working_memory(
+        &self,
+        request: UpdateWorkingMemoryInput,
+    ) -> Result<GetWorkingMemoryResponse, MastraClientError> {
+        self.inner
+            .request(Method::PUT, &self.working_memory_path(), Some(&request))
+            .await
+    }
+
     pub async fn messages(&self) -> Result<ListMemoryMessagesResponse, MastraClientError> {
         self.messages_with_query(ListMessagesQuery::default()).await
     }
@@ -838,6 +903,35 @@ impl MemoryThreadClient {
                 Some(&query),
                 Option::<&()>::None,
             )
+            .await
+    }
+
+    pub async fn observations(&self) -> Result<ListObservationsResponse, MastraClientError> {
+        self.observations_with_query(ListObservationsQuery::default())
+            .await
+    }
+
+    pub async fn observations_with_query(
+        &self,
+        query: ListObservationsQuery,
+    ) -> Result<ListObservationsResponse, MastraClientError> {
+        let query = ObservationsQueryWire::try_from(query)?;
+        self.inner
+            .request_with_query(
+                Method::GET,
+                &self.observations_path(),
+                Some(&query),
+                Option::<&()>::None,
+            )
+            .await
+    }
+
+    pub async fn append_observation(
+        &self,
+        request: AppendObservationInput,
+    ) -> Result<mastra_core::ObservationRecord, MastraClientError> {
+        self.inner
+            .request(Method::POST, &self.observations_path(), Some(&request))
             .await
     }
 
@@ -1168,6 +1262,31 @@ impl TryFrom<ListMessagesQuery> for MessageQueryWire {
             start_date: query.start_date,
             end_date: query.end_date,
             order_by: query.order_by.map(serialize_message_order_by).transpose()?,
+        })
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ObservationsQueryWire {
+    #[serde(skip_serializing_if = "Option::is_none", rename = "page")]
+    page: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "perPage")]
+    per_page: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "resourceId")]
+    resource_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<mastra_core::MemoryScope>,
+}
+
+impl TryFrom<ListObservationsQuery> for ObservationsQueryWire {
+    type Error = MastraClientError;
+
+    fn try_from(query: ListObservationsQuery) -> Result<Self, Self::Error> {
+        Ok(Self {
+            page: query.page,
+            per_page: query.per_page,
+            resource_id: query.resource_id,
+            scope: query.scope,
         })
     }
 }

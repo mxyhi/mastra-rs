@@ -9,7 +9,7 @@ pub use client::{
 pub use error::MastraClientError;
 pub use types::{
     AgentDetail, AgentDetailResponse, AgentMessages, AgentSummary, AppendMemoryMessagesRequest,
-    AppendMemoryMessagesResponse, CancelWorkflowRunResponse, ChatMessage,
+    AppendMemoryMessagesResponse, AppendObservationInput, CancelWorkflowRunResponse, ChatMessage,
     CloneMemoryThreadMessageFilter, CloneMemoryThreadOptions, CloneMemoryThreadRequest,
     CloneMemoryThreadResponse, CreateMemoryThreadRequest, CreateMemoryThreadResponse,
     CreateWorkflowRunRequest, DeleteMemoryMessagesInput, DeleteMemoryMessagesRequest,
@@ -18,15 +18,17 @@ pub use types::{
     GenerateMemoryThreadObject, GenerateMemoryThreadRef, GenerateRequest, GenerateResponse,
     GenerateStreamEvent, GenerateStreamFinishEvent, GenerateStreamStartEvent,
     GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent, GenerateStreamToolResultEvent,
-    ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery,
-    ListThreadsQuery, ListThreadsResponse, ListToolsResponse, ListWorkflowRunsQuery,
-    ListWorkflowRunsResponse, ListWorkflowsResponse, MemoryMessageInput, MemoryMessageRole,
-    MemorySummary, MessageOrderBy, MessageOrderField, OrderDirection, PaginationSizeValue,
-    ResumeWorkflowRunRequest, ResumeWorkflowRunResponse, RouteDescription, StartWorkflowRunRequest,
-    StartWorkflowRunResponse, SystemPackage, SystemPackagesResponse, ThreadOrderBy,
-    ThreadOrderField, ToolChoice, ToolChoiceMode, ToolSummary, UpdateMemoryThreadRequest,
-    UsageStats, WorkflowDetail, WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunRef,
-    WorkflowRunStatus, WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamQuery,
+    GetWorkingMemoryResponse, ListAgentsResponse, ListMemoriesResponse,
+    ListMemoryMessagesResponse, ListMessagesQuery, ListObservationsQuery,
+    ListObservationsResponse, ListThreadsQuery, ListThreadsResponse, ListToolsResponse,
+    ListWorkflowRunsQuery, ListWorkflowRunsResponse, ListWorkflowsResponse, MemoryMessageInput,
+    MemoryMessageRole, MemorySummary, MessageOrderBy, MessageOrderField, OrderDirection,
+    PaginationSizeValue, ResumeWorkflowRunRequest, ResumeWorkflowRunResponse, RouteDescription,
+    StartWorkflowRunRequest, StartWorkflowRunResponse, SystemPackage, SystemPackagesResponse,
+    ThreadOrderBy, ThreadOrderField, ToolChoice, ToolChoiceMode, ToolSummary,
+    UpdateMemoryThreadRequest, UpdateWorkingMemoryInput, UsageStats, WorkflowDetail,
+    WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunRef, WorkflowRunStatus,
+    WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamQuery,
     WorkflowStreamStartEvent, WorkflowStreamStepEvent, WorkflowSummary,
 };
 
@@ -38,8 +40,8 @@ mod tests {
     use futures::StreamExt;
     use indexmap::IndexMap;
     use mastra_core::{
-        Agent, AgentConfig, MemoryConfig, ModelRequest, ModelResponse, StaticModel, Step, Tool,
-        Workflow,
+        Agent, AgentConfig, MemoryConfig, MemoryScope, ModelRequest, ModelResponse, StaticModel,
+        Step, Tool, Workflow, WorkingMemoryFormat,
     };
     use mastra_memory::Memory;
     use mastra_server::{MastraRuntimeRegistry, MastraServer};
@@ -47,15 +49,16 @@ mod tests {
     use tokio::{net::TcpListener, task::JoinHandle};
 
     use super::{
-        AgentMessages, AppendMemoryMessagesRequest, ChatMessage, CloneMemoryThreadRequest,
-        CreateMemoryThreadRequest, CreateWorkflowRunRequest, DeleteMemoryMessagesInput,
-        DeleteMemoryMessagesRequest, ExecuteToolRequest, GenerateMemoryConfig,
-        GenerateMemoryOptions, GenerateMemoryThreadObject, GenerateMemoryThreadRef,
-        GenerateRequest, ListMessagesQuery, ListThreadsQuery, ListWorkflowRunsQuery, MastraClient,
-        MastraClientBuilder, MastraClientError, MemoryMessageInput, MemoryMessageRole,
-        MessageOrderBy, MessageOrderField, OrderDirection, PaginationSizeValue,
-        ResumeWorkflowRunRequest, StartWorkflowRunRequest, ThreadOrderBy, ThreadOrderField,
-        ToolChoice, UpdateMemoryThreadRequest, WorkflowRunStatus,
+        AgentMessages, AppendMemoryMessagesRequest, AppendObservationInput, ChatMessage,
+        CloneMemoryThreadRequest, CreateMemoryThreadRequest, CreateWorkflowRunRequest,
+        DeleteMemoryMessagesInput, DeleteMemoryMessagesRequest, ExecuteToolRequest,
+        GenerateMemoryConfig, GenerateMemoryOptions, GenerateMemoryThreadObject,
+        GenerateMemoryThreadRef, GenerateRequest, ListMessagesQuery, ListObservationsQuery,
+        ListThreadsQuery, ListWorkflowRunsQuery, MastraClient, MastraClientBuilder,
+        MastraClientError, MemoryMessageInput, MemoryMessageRole, MessageOrderBy,
+        MessageOrderField, OrderDirection, PaginationSizeValue, ResumeWorkflowRunRequest,
+        StartWorkflowRunRequest, ThreadOrderBy, ThreadOrderField, ToolChoice,
+        UpdateMemoryThreadRequest, UpdateWorkingMemoryInput, WorkflowRunStatus,
     };
 
     struct TestHarness {
@@ -743,6 +746,93 @@ mod tests {
             .unwrap();
         assert_eq!(fetched.id, created.id);
         assert_eq!(fetched.title.as_deref(), Some("Top-level memory thread"));
+    }
+
+    #[tokio::test]
+    async fn supports_working_memory_and_observation_routes() {
+        let harness = TestHarness::spawn().await;
+        let client = MastraClientBuilder::new(harness.base_url.clone())
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap();
+
+        let thread = client
+            .create_memory_thread(CreateMemoryThreadRequest {
+                id: None,
+                resource_id: Some("resource-memory".to_owned()),
+                title: Some("Memory APIs".to_owned()),
+                metadata: json!({}),
+            })
+            .await
+            .unwrap()
+            .thread;
+
+        let updated = client
+            .default_memory()
+            .update_working_memory(
+                &thread.id,
+                UpdateWorkingMemoryInput {
+                    resource_id: Some("resource-memory".to_owned()),
+                    scope: Some(MemoryScope::Thread),
+                    format: Some(WorkingMemoryFormat::Json),
+                    template: Some("# User Profile".to_owned()),
+                    content: json!({ "name": "Sam" }),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            updated.working_memory.unwrap().content,
+            json!({ "name": "Sam" })
+        );
+
+        let fetched = client
+            .default_memory()
+            .get_working_memory(&thread.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            fetched
+                .working_memory
+                .as_ref()
+                .and_then(|memory| memory.template.as_deref()),
+            Some("# User Profile")
+        );
+
+        let appended = client
+            .default_memory()
+            .append_observation(
+                &thread.id,
+                AppendObservationInput {
+                    resource_id: Some("resource-memory".to_owned()),
+                    scope: Some(MemoryScope::Thread),
+                    content: "User likes Rust".to_owned(),
+                    observed_message_ids: vec![
+                        "00000000-0000-7000-8000-000000000001".to_owned()
+                    ],
+                    metadata: json!({ "kind": "summary" }),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(appended.content, "User likes Rust");
+
+        let observations = client
+            .default_memory()
+            .observations_with_query(
+                &thread.id,
+                ListObservationsQuery {
+                    page: Some(0),
+                    per_page: Some("false".to_owned()),
+                    resource_id: Some("resource-memory".to_owned()),
+                    scope: Some(MemoryScope::Thread),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(serde_json::to_value(&observations.per_page).unwrap(), json!(false));
+        assert_eq!(observations.observations.len(), 1);
+        assert_eq!(observations.observations[0].content, "User likes Rust");
     }
 
     #[test]

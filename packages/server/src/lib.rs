@@ -12,16 +12,18 @@ use registry::RuntimeRegistry;
 use runtime::{CoreAgentRuntime, CoreWorkflowRuntime};
 
 pub use contracts::{
-    AgentDetail, AgentDetailResponse, AgentMessages, AgentSummary, CancelWorkflowRunResponse,
-    ChatMessage, DeleteWorkflowRunResponse, ErrorResponse, ExecuteToolRequest, ExecuteToolResponse,
-    FinishReason, GenerateMemoryConfig, GenerateMemoryOptions, GenerateMemoryThreadObject,
-    GenerateMemoryThreadRef, GenerateResponse, GenerateStreamEvent, GenerateStreamFinishEvent,
-    GenerateStreamStartEvent, GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent,
-    GenerateStreamToolResultEvent, GetMemoryThreadResponse, ListToolsResponse,
-    ListWorkflowRunsQuery, ListWorkflowRunsResponse, ResumeWorkflowRunRequest,
-    ResumeWorkflowRunResponse, RouteDescription, StartWorkflowRunResponse as WorkflowRunResponse,
-    SystemPackage, SystemPackagesResponse, ToolChoice, ToolChoiceMode, ToolSummary,
-    UpdateMemoryThreadRequest, UsageStats, WorkflowDetail, WorkflowDetailResponse,
+    AgentDetail, AgentDetailResponse, AgentMessages, AgentSummary, AppendObservationInput,
+    CancelWorkflowRunResponse, ChatMessage, DeleteWorkflowRunResponse, ErrorResponse,
+    ExecuteToolRequest, ExecuteToolResponse, FinishReason, GenerateMemoryConfig,
+    GenerateMemoryOptions, GenerateMemoryThreadObject, GenerateMemoryThreadRef, GenerateResponse,
+    GenerateStreamEvent, GenerateStreamFinishEvent, GenerateStreamStartEvent,
+    GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent, GenerateStreamToolResultEvent,
+    GetMemoryThreadResponse, GetWorkingMemoryResponse, ListObservationsQuery,
+    ListObservationsResponse, ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse,
+    ResumeWorkflowRunRequest, ResumeWorkflowRunResponse,
+    RouteDescription, StartWorkflowRunResponse as WorkflowRunResponse, SystemPackage,
+    SystemPackagesResponse, ToolChoice, ToolChoiceMode, ToolSummary, UpdateMemoryThreadRequest,
+    UpdateWorkingMemoryInput, UsageStats, WorkflowDetail, WorkflowDetailResponse,
     WorkflowRunRecord, WorkflowRunStatus, WorkflowStepSummary, WorkflowStreamEvent,
     WorkflowStreamFinishEvent, WorkflowStreamStartEvent, WorkflowStreamStepEvent, WorkflowSummary,
 };

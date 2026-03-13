@@ -1,6 +1,9 @@
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
-use mastra_core::{MemoryMessage, Thread, Tool};
+use mastra_core::{
+    MemoryMessage, MemoryScope, ObservationRecord, Thread, Tool, WorkingMemoryFormat,
+    WorkingMemoryState,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -606,6 +609,40 @@ pub struct GetMemoryThreadResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GetWorkingMemoryResponse {
+    pub working_memory: Option<WorkingMemoryState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UpdateWorkingMemoryInput {
+    #[serde(default)]
+    #[serde(alias = "resourceId")]
+    pub resource_id: Option<String>,
+    #[serde(default)]
+    pub scope: Option<MemoryScope>,
+    #[serde(default)]
+    pub format: Option<WorkingMemoryFormat>,
+    #[serde(default)]
+    pub template: Option<String>,
+    pub content: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AppendObservationInput {
+    #[serde(default)]
+    #[serde(alias = "resourceId")]
+    pub resource_id: Option<String>,
+    #[serde(default)]
+    pub scope: Option<MemoryScope>,
+    pub content: String,
+    #[serde(default)]
+    #[serde(rename = "observedMessageIds", alias = "observed_message_ids")]
+    pub observed_message_ids: Vec<String>,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UpdateMemoryThreadRequest {
     #[serde(default)]
     #[serde(alias = "resourceId")]
@@ -793,6 +830,15 @@ pub struct ListMemoryMessagesResponse {
     pub has_more: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ListObservationsResponse {
+    pub observations: Vec<ObservationRecord>,
+    pub total: usize,
+    pub page: usize,
+    pub per_page: PaginationSizeValue,
+    pub has_more: bool,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum OrderDirection {
@@ -907,6 +953,21 @@ pub struct ListMessagesQuery {
     pub order_by: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListObservationsQuery {
+    #[serde(default)]
+    #[serde(alias = "page")]
+    pub page: Option<usize>,
+    #[serde(default)]
+    #[serde(rename = "perPage", alias = "per_page")]
+    pub per_page: Option<String>,
+    #[serde(default)]
+    #[serde(rename = "resourceId", alias = "resource_id")]
+    pub resource_id: Option<String>,
+    #[serde(default)]
+    pub scope: Option<MemoryScope>,
+}
+
 impl ListMessagesQuery {
     pub fn parsed_order_by(&self) -> Result<Option<MessageOrderBy>, String> {
         self.order_by
@@ -915,6 +976,23 @@ impl ListMessagesQuery {
             .transpose()
     }
 
+    pub fn parsed_per_page(&self) -> Result<Option<usize>, String> {
+        self.per_page
+            .as_deref()
+            .map(parse_per_page)
+            .transpose()
+            .map(Option::flatten)
+    }
+
+    pub fn response_per_page(&self, effective: usize) -> PaginationSizeValue {
+        match self.per_page.as_deref() {
+            Some("false") => PaginationSizeValue::All(false),
+            _ => PaginationSizeValue::Number(effective),
+        }
+    }
+}
+
+impl ListObservationsQuery {
     pub fn parsed_per_page(&self) -> Result<Option<usize>, String> {
         self.per_page
             .as_deref()
