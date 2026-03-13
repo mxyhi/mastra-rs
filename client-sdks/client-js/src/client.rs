@@ -15,15 +15,16 @@ use crate::{
     MastraClientError,
     types::{
         AgentDetailResponse, AppendMemoryMessagesRequest, AppendMemoryMessagesResponse,
-        CreateMemoryThreadRequest, CreateMemoryThreadResponse, CreateWorkflowRunRequest,
-        DeleteMemoryMessagesRequest, DeleteMemoryMessagesResponse, DeleteWorkflowRunResponse,
-        ErrorResponse, ExecuteToolRequest, ExecuteToolResponse, GenerateRequest, GenerateResponse,
-        GenerateStreamEvent, GetMemoryThreadResponse, ListAgentsResponse, ListMemoriesResponse,
-        ListMemoryMessagesResponse, ListMessagesQuery, ListThreadsQuery, ListThreadsResponse,
-        ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse, ListWorkflowsResponse,
-        MessageOrderBy, PaginationSizeValue, StartWorkflowRunRequest, StartWorkflowRunResponse,
-        SystemPackagesResponse, ThreadOrderBy, ToolSummary, UpdateMemoryThreadRequest,
-        WorkflowDetailResponse, WorkflowRunRecord, WorkflowStreamEvent,
+        CancelWorkflowRunResponse, CreateMemoryThreadRequest, CreateMemoryThreadResponse,
+        CreateWorkflowRunRequest, DeleteMemoryMessagesRequest, DeleteMemoryMessagesResponse,
+        DeleteWorkflowRunResponse, ErrorResponse, ExecuteToolRequest, ExecuteToolResponse,
+        GenerateRequest, GenerateResponse, GenerateStreamEvent, GetMemoryThreadResponse,
+        ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery,
+        ListThreadsQuery, ListThreadsResponse, ListToolsResponse, ListWorkflowRunsQuery,
+        ListWorkflowRunsResponse, ListWorkflowsResponse, MessageOrderBy, PaginationSizeValue,
+        ResumeWorkflowRunRequest, ResumeWorkflowRunResponse, StartWorkflowRunRequest,
+        StartWorkflowRunResponse, SystemPackagesResponse, ThreadOrderBy, ToolSummary,
+        UpdateMemoryThreadRequest, WorkflowDetailResponse, WorkflowRunRecord, WorkflowStreamEvent,
     },
 };
 
@@ -504,6 +505,32 @@ impl WorkflowClient {
             .await
     }
 
+    pub async fn resume_async(
+        &self,
+        request: ResumeWorkflowRunRequest,
+    ) -> Result<StartWorkflowRunResponse, MastraClientError> {
+        self.inner
+            .request(
+                Method::POST,
+                &format!("/workflows/{}/resume-async", self.workflow_id),
+                Some(&request),
+            )
+            .await
+    }
+
+    pub async fn resume(
+        &self,
+        request: ResumeWorkflowRunRequest,
+    ) -> Result<ResumeWorkflowRunResponse, MastraClientError> {
+        self.inner
+            .request(
+                Method::POST,
+                &format!("/workflows/{}/resume", self.workflow_id),
+                Some(&request),
+            )
+            .await
+    }
+
     pub async fn run(
         &self,
         run_id: impl std::fmt::Display,
@@ -555,6 +582,19 @@ impl WorkflowClient {
             .await
     }
 
+    pub async fn cancel_run_by_id(
+        &self,
+        run_id: impl std::fmt::Display,
+    ) -> Result<CancelWorkflowRunResponse, MastraClientError> {
+        self.inner
+            .request(
+                Method::POST,
+                &format!("/workflows/{}/runs/{}/cancel", self.workflow_id, run_id),
+                Option::<&()>::None,
+            )
+            .await
+    }
+
     pub async fn stream(
         &self,
         request: StartWorkflowRunRequest,
@@ -575,6 +615,24 @@ impl WorkflowClient {
         MastraClientError,
     > {
         self.stream_internal(Some(run_id.to_owned()), request).await
+    }
+
+    pub async fn resume_stream(
+        &self,
+        request: ResumeWorkflowRunRequest,
+    ) -> Result<
+        impl Stream<Item = Result<WorkflowStreamEvent, MastraClientError>> + Send + 'static,
+        MastraClientError,
+    > {
+        let response = self
+            .inner
+            .stream_request(
+                Method::POST,
+                &format!("/workflows/{}/resume-stream", self.workflow_id),
+                Some(&request),
+            )
+            .await?;
+        Ok(decode_event_stream(response))
     }
 
     async fn stream_internal(

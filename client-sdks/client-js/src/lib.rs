@@ -9,25 +9,25 @@ pub use client::{
 pub use error::MastraClientError;
 pub use types::{
     AgentDetail, AgentDetailResponse, AgentMessages, AgentSummary, AppendMemoryMessagesRequest,
-    AppendMemoryMessagesResponse, ChatMessage, CloneMemoryThreadMessageFilter,
-    CloneMemoryThreadOptions, CloneMemoryThreadRequest, CloneMemoryThreadResponse,
-    CreateMemoryThreadRequest, CreateMemoryThreadResponse, CreateWorkflowRunRequest,
-    DeleteMemoryMessagesInput, DeleteMemoryMessagesRequest, DeleteMemoryMessagesResponse,
-    DeleteWorkflowRunResponse, ErrorResponse, ExecuteToolRequest, ExecuteToolResponse,
-    FinishReason, GenerateMemoryConfig, GenerateMemoryOptions, GenerateMemoryThreadObject,
-    GenerateMemoryThreadRef, GenerateRequest, GenerateResponse, GenerateStreamEvent,
-    GenerateStreamFinishEvent, GenerateStreamStartEvent, GenerateStreamTextDeltaEvent,
-    GenerateStreamToolCallEvent, GenerateStreamToolResultEvent, ListAgentsResponse,
-    ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery, ListThreadsQuery,
-    ListThreadsResponse, ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse,
-    ListWorkflowsResponse, MemoryMessageInput, MemoryMessageRole, MemorySummary, MessageOrderBy,
-    MessageOrderField, OrderDirection, PaginationSizeValue, RouteDescription,
-    StartWorkflowRunRequest, StartWorkflowRunResponse, SystemPackage, SystemPackagesResponse,
-    ThreadOrderBy, ThreadOrderField, ToolChoice, ToolChoiceMode, ToolSummary,
-    UpdateMemoryThreadRequest, UsageStats, WorkflowDetail, WorkflowDetailResponse,
-    WorkflowRunRecord, WorkflowRunRef, WorkflowRunStatus, WorkflowStreamEvent,
-    WorkflowStreamFinishEvent, WorkflowStreamQuery, WorkflowStreamStartEvent,
-    WorkflowStreamStepEvent, WorkflowSummary,
+    AppendMemoryMessagesResponse, CancelWorkflowRunResponse, ChatMessage,
+    CloneMemoryThreadMessageFilter, CloneMemoryThreadOptions, CloneMemoryThreadRequest,
+    CloneMemoryThreadResponse, CreateMemoryThreadRequest, CreateMemoryThreadResponse,
+    CreateWorkflowRunRequest, DeleteMemoryMessagesInput, DeleteMemoryMessagesRequest,
+    DeleteMemoryMessagesResponse, DeleteWorkflowRunResponse, ErrorResponse, ExecuteToolRequest,
+    ExecuteToolResponse, FinishReason, GenerateMemoryConfig, GenerateMemoryOptions,
+    GenerateMemoryThreadObject, GenerateMemoryThreadRef, GenerateRequest, GenerateResponse,
+    GenerateStreamEvent, GenerateStreamFinishEvent, GenerateStreamStartEvent,
+    GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent, GenerateStreamToolResultEvent,
+    ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery,
+    ListThreadsQuery, ListThreadsResponse, ListToolsResponse, ListWorkflowRunsQuery,
+    ListWorkflowRunsResponse, ListWorkflowsResponse, MemoryMessageInput, MemoryMessageRole,
+    MemorySummary, MessageOrderBy, MessageOrderField, OrderDirection, PaginationSizeValue,
+    ResumeWorkflowRunRequest, ResumeWorkflowRunResponse, RouteDescription, StartWorkflowRunRequest,
+    StartWorkflowRunResponse, SystemPackage, SystemPackagesResponse, ThreadOrderBy,
+    ThreadOrderField, ToolChoice, ToolChoiceMode, ToolSummary, UpdateMemoryThreadRequest,
+    UsageStats, WorkflowDetail, WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunRef,
+    WorkflowRunStatus, WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamQuery,
+    WorkflowStreamStartEvent, WorkflowStreamStepEvent, WorkflowSummary,
 };
 
 #[cfg(test)]
@@ -54,8 +54,8 @@ mod tests {
         GenerateRequest, ListMessagesQuery, ListThreadsQuery, ListWorkflowRunsQuery, MastraClient,
         MastraClientBuilder, MastraClientError, MemoryMessageInput, MemoryMessageRole,
         MessageOrderBy, MessageOrderField, OrderDirection, PaginationSizeValue,
-        StartWorkflowRunRequest, ThreadOrderBy, ThreadOrderField, ToolChoice,
-        UpdateMemoryThreadRequest, WorkflowRunStatus,
+        ResumeWorkflowRunRequest, StartWorkflowRunRequest, ThreadOrderBy, ThreadOrderField,
+        ToolChoice, UpdateMemoryThreadRequest, WorkflowRunStatus,
     };
 
     struct TestHarness {
@@ -489,6 +489,25 @@ mod tests {
             .unwrap();
         assert_eq!(created.status, WorkflowRunStatus::Created);
 
+        let resumed = client
+            .workflow("demo")
+            .resume_async(ResumeWorkflowRunRequest {
+                run_id: Some(created.run_id.to_string()),
+                step: None,
+                resume_data: Some(json!({"topic": "resumed"})),
+                request_context: Default::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(resumed.run.status, WorkflowRunStatus::Success);
+        assert_eq!(
+            resumed.run.result,
+            Some(json!({
+                "accepted": true,
+                "input": {"topic": "resumed"}
+            }))
+        );
+
         let explicit_run_id = "018f7f26-8b7e-7c9d-b145-2c3d4e5f6790";
         let explicit = client
             .workflow("demo")
@@ -507,6 +526,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(explicit_fetched.run_id.to_string(), explicit_run_id);
+
+        let cancelled = client
+            .workflow("demo")
+            .cancel_run_by_id(explicit_run_id)
+            .await
+            .unwrap();
+        assert_eq!(cancelled.message, "Workflow run cancelled");
+        let explicit_after_cancel = client
+            .workflow("demo")
+            .run_by_id(explicit_run_id)
+            .await
+            .unwrap();
+        assert_eq!(explicit_after_cancel.status, WorkflowRunStatus::Cancelled);
 
         let started = client
             .workflow("demo")

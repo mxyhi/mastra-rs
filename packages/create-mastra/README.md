@@ -34,13 +34,13 @@ The starter deliberately stays inside the subset already implemented by this wor
 - `Memory::in_memory()` from `mastra-memory`
 - `StaticModel::echo()` as the sample model
 - `init_tracing("info")` from `mastra-loggers`
-- `mastra.json` as a snake_case project graph manifest for CLI-side loading
+- `mastra.json` as a `schema_version` project graph manifest with per-node path references
 - one default memory, one sum tool, one echo agent, and one static_json workflow
 
 ## Current Boundary
 
 This is a single built-in starter generator, not the full upstream template catalog.
-It is now shaped so `mastra dev/build/start` can consume a non-empty project graph once the CLI-side loader lands.
+It is now shaped so `mastra lint/dev/build/start` can consume a non-empty project graph end to end.
 
 Not implemented yet:
 

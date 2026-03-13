@@ -27,7 +27,11 @@ let thread_client = client.get_memory_thread(thread.thread.id.clone());
 
 - create run
 - start async
+- resume
+- resume async
+- resume stream
 - stream
+- cancel run by id
 - list runs with filters
 - get run by id
 - delete run by id
@@ -59,5 +63,4 @@ The Rust client now shares the server contract types for `GenerateMemoryConfig` 
 - working memory APIs
 - observational memory APIs
 - vectors, logs, and telemetry clients
-- workflow resume or cancel APIs
 - full upstream structured-output/runtime-processor semantics

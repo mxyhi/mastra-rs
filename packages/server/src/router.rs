@@ -21,18 +21,19 @@ use uuid::Uuid;
 use crate::{
     contracts::{
         AgentDetailResponse, AppendMemoryMessagesRequest, AppendMemoryMessagesResponse,
-        CloneMemoryThreadRequest, CloneMemoryThreadResponse, CreateMemoryThreadRequest,
-        CreateMemoryThreadResponse, CreateWorkflowRunRequest, DeleteMemoryMessagesRequest,
-        DeleteMemoryMessagesResponse, DeleteWorkflowRunResponse, ErrorResponse, ExecuteToolRequest,
-        ExecuteToolResponse, GenerateRequest, GenerateStreamEvent, GetMemoryThreadResponse,
-        ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery,
-        ListThreadsQuery, ListThreadsResponse, ListToolsResponse, ListWorkflowRunsQuery,
-        ListWorkflowRunsResponse, ListWorkflowsResponse, MessageOrderBy, MessageOrderField,
-        OrderDirection, RouteDescription, StartWorkflowRunRequest, StartWorkflowRunResponse,
-        SystemPackage, SystemPackagesResponse, ThreadOrderBy, ThreadOrderField,
-        UpdateMemoryThreadRequest, WorkflowDetailResponse, WorkflowRunRecord, WorkflowStreamEvent,
-        WorkflowStreamFinishEvent, WorkflowStreamQuery, WorkflowStreamStartEvent,
-        WorkflowStreamStepEvent,
+        CancelWorkflowRunResponse, CloneMemoryThreadRequest, CloneMemoryThreadResponse,
+        CreateMemoryThreadRequest, CreateMemoryThreadResponse, CreateWorkflowRunRequest,
+        DeleteMemoryMessagesRequest, DeleteMemoryMessagesResponse, DeleteWorkflowRunResponse,
+        ErrorResponse, ExecuteToolRequest, ExecuteToolResponse, GenerateRequest,
+        GenerateStreamEvent, GetMemoryThreadResponse, ListAgentsResponse, ListMemoriesResponse,
+        ListMemoryMessagesResponse, ListMessagesQuery, ListThreadsQuery, ListThreadsResponse,
+        ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse, ListWorkflowsResponse,
+        MessageOrderBy, MessageOrderField, OrderDirection, ResumeWorkflowRunRequest,
+        ResumeWorkflowRunResponse, RouteDescription, StartWorkflowRunRequest,
+        StartWorkflowRunResponse, SystemPackage, SystemPackagesResponse, ThreadOrderBy,
+        ThreadOrderField, UpdateMemoryThreadRequest, WorkflowDetailResponse, WorkflowRunRecord,
+        WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamQuery,
+        WorkflowStreamStartEvent, WorkflowStreamStepEvent,
     },
     error::{ServerError, ServerResult},
     registry::RuntimeRegistry,
@@ -178,11 +179,24 @@ impl MastraServer {
                 "/workflows/{workflow_id}/start-async",
                 post(start_workflow_async),
             )
+            .route("/workflows/{workflow_id}/resume", post(resume_workflow))
+            .route(
+                "/workflows/{workflow_id}/resume-async",
+                post(resume_workflow_async),
+            )
+            .route(
+                "/workflows/{workflow_id}/resume-stream",
+                post(stream_resumed_workflow),
+            )
             .route("/workflows/{workflow_id}/stream", post(stream_workflow))
             .route("/workflows/{workflow_id}/runs", get(list_workflow_runs))
             .route(
                 "/workflows/{workflow_id}/runs/{run_id}",
                 get(get_workflow_run).delete(delete_workflow_run),
+            )
+            .route(
+                "/workflows/{workflow_id}/runs/{run_id}/cancel",
+                post(cancel_workflow_run),
             )
             .with_state(AppState {
                 registry: self.registry.clone(),
@@ -335,6 +349,21 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
         ),
         (
             "POST",
+            "/workflows/{workflow_id}/resume",
+            "Resume a workflow run and wait for completion",
+        ),
+        (
+            "POST",
+            "/workflows/{workflow_id}/resume-async",
+            "Resume a workflow run asynchronously",
+        ),
+        (
+            "POST",
+            "/workflows/{workflow_id}/resume-stream",
+            "Resume a workflow run as an event stream",
+        ),
+        (
+            "POST",
             "/workflows/{workflow_id}/stream",
             "Stream workflow execution events",
         ),
@@ -352,6 +381,11 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
             "DELETE",
             "/workflows/{workflow_id}/runs/{run_id}",
             "Delete a workflow run record",
+        ),
+        (
+            "POST",
+            "/workflows/{workflow_id}/runs/{run_id}/cancel",
+            "Cancel a workflow run record",
         ),
     ]
     .into_iter()
@@ -963,6 +997,76 @@ async fn start_workflow_async(
     }
 }
 
+fn parse_resume_run_id(request: &ResumeWorkflowRunRequest) -> ServerResult<Uuid> {
+    let run_id = request
+        .run_id
+        .as_deref()
+        .ok_or_else(|| ServerError::BadRequest("runId required to resume workflow".to_owned()))?;
+    Uuid::parse_str(run_id)
+        .map_err(|error| ServerError::BadRequest(format!("invalid runId '{run_id}': {error}")))
+}
+
+fn start_request_from_resume(
+    existing_run: &WorkflowRunRecord,
+    request: ResumeWorkflowRunRequest,
+) -> StartWorkflowRunRequest {
+    StartWorkflowRunRequest {
+        resource_id: existing_run.resource_id.clone(),
+        input_data: request
+            .resume_data
+            .or_else(|| existing_run.input_data.clone()),
+        request_context: request.request_context,
+    }
+}
+
+#[instrument(skip(state, request))]
+async fn resume_workflow_async(
+    State(state): State<AppState>,
+    Path(workflow_id): Path<String>,
+    Json(request): Json<ResumeWorkflowRunRequest>,
+) -> ServerResult<Json<StartWorkflowRunResponse>> {
+    let workflow = state.registry.find_workflow(&workflow_id)?;
+    let run_id = parse_resume_run_id(&request)?;
+    let existing_run = state.registry.get_workflow_run(&workflow_id, run_id)?;
+    let start_request = start_request_from_resume(&existing_run, request);
+
+    state
+        .registry
+        .restart_workflow_run(&workflow_id, run_id, &start_request)?;
+
+    match workflow.start(start_request).await {
+        Ok(result) => {
+            let run = state
+                .registry
+                .complete_workflow_run_success(run_id, result)?;
+            Ok(Json(StartWorkflowRunResponse { run }))
+        }
+        Err(error) => {
+            let run = state
+                .registry
+                .complete_workflow_run_failure(run_id, &error)?;
+            Err(ServerError::Internal(format!(
+                "workflow '{}' failed to resume: {} (run_id={})",
+                workflow_id, error, run.run_id
+            )))
+        }
+    }
+}
+
+#[instrument(skip(state, request))]
+async fn resume_workflow(
+    State(state): State<AppState>,
+    Path(workflow_id): Path<String>,
+    Json(request): Json<ResumeWorkflowRunRequest>,
+) -> ServerResult<Json<ResumeWorkflowRunResponse>> {
+    let response = resume_workflow_async(State(state), Path(workflow_id), Json(request)).await?;
+
+    Ok(Json(ResumeWorkflowRunResponse {
+        message: "Workflow run resumed".to_owned(),
+        run: Some(response.0.run),
+    }))
+}
+
 #[instrument(skip(state, request))]
 async fn stream_workflow(
     State(state): State<AppState>,
@@ -1054,6 +1158,98 @@ async fn stream_workflow(
     Ok(Sse::new(event_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
 
+#[instrument(skip(state, request))]
+async fn stream_resumed_workflow(
+    State(state): State<AppState>,
+    Path(workflow_id): Path<String>,
+    Json(request): Json<ResumeWorkflowRunRequest>,
+) -> ServerResult<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>> {
+    let workflow = state.registry.find_workflow(&workflow_id)?;
+    let run_uuid = parse_resume_run_id(&request)?;
+    let existing_run = state.registry.get_workflow_run(&workflow_id, run_uuid)?;
+    let start_request = start_request_from_resume(&existing_run, request);
+    let resumed_run =
+        state
+            .registry
+            .restart_workflow_run(&workflow_id, run_uuid, &start_request)?;
+    let run_id = resumed_run.run_id.to_string();
+    let mut step_ids = workflow
+        .detail()
+        .steps
+        .into_iter()
+        .map(|step| step.id)
+        .collect::<Vec<_>>();
+    if step_ids.is_empty() {
+        step_ids.push("workflow".to_owned());
+    }
+    let registry = state.registry.clone();
+    let workflow_id_for_events = workflow_id.clone();
+
+    let event_stream = stream! {
+        yield Ok(encode_workflow_stream_event(WorkflowStreamEvent::Start(
+            WorkflowStreamStartEvent {
+                run_id: run_id.clone(),
+                workflow_id: workflow_id_for_events.clone(),
+                resource_id: resumed_run.resource_id.clone(),
+            },
+        )));
+
+        for step_id in &step_ids {
+            yield Ok(encode_workflow_stream_event(WorkflowStreamEvent::StepStart(
+                WorkflowStreamStepEvent {
+                    run_id: run_id.clone(),
+                    workflow_id: workflow_id_for_events.clone(),
+                    step_id: step_id.clone(),
+                },
+            )));
+        }
+
+        match workflow.start(start_request).await {
+            Ok(result) => {
+                for step_id in &step_ids {
+                    yield Ok(encode_workflow_stream_event(WorkflowStreamEvent::StepFinish(
+                        WorkflowStreamStepEvent {
+                            run_id: run_id.clone(),
+                            workflow_id: workflow_id_for_events.clone(),
+                            step_id: step_id.clone(),
+                        },
+                    )));
+                }
+
+                match registry.complete_workflow_run_success(run_uuid, result.clone()) {
+                    Ok(_) => {
+                        yield Ok(encode_workflow_stream_event(WorkflowStreamEvent::Finish(
+                            WorkflowStreamFinishEvent {
+                                run_id: run_id.clone(),
+                                workflow_id: workflow_id_for_events.clone(),
+                                status: "success".to_owned(),
+                                result,
+                            },
+                        )));
+                    }
+                    Err(error) => {
+                        yield Ok(encode_workflow_stream_event(WorkflowStreamEvent::Error(
+                            ErrorResponse {
+                                error: error.to_string(),
+                            },
+                        )));
+                    }
+                }
+            }
+            Err(error) => {
+                let _ = registry.complete_workflow_run_failure(run_uuid, &error);
+                yield Ok(encode_workflow_stream_event(WorkflowStreamEvent::Error(
+                    ErrorResponse {
+                        error: error.to_string(),
+                    },
+                )));
+            }
+        }
+    };
+
+    Ok(Sse::new(event_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
 #[instrument(skip(state))]
 async fn list_workflow_runs(
     State(state): State<AppState>,
@@ -1090,6 +1286,22 @@ async fn delete_workflow_run(
         .delete_workflow_run(&workflow_id, parsed_run_id)?;
     Ok(Json(DeleteWorkflowRunResponse {
         message: "Workflow run deleted".to_owned(),
+    }))
+}
+
+#[instrument(skip(state))]
+async fn cancel_workflow_run(
+    State(state): State<AppState>,
+    Path((workflow_id, run_id)): Path<(String, String)>,
+) -> ServerResult<Json<CancelWorkflowRunResponse>> {
+    let parsed_run_id =
+        Uuid::parse_str(&run_id).map_err(|error| ServerError::BadRequest(error.to_string()))?;
+    state
+        .registry
+        .cancel_workflow_run(&workflow_id, parsed_run_id)?;
+
+    Ok(Json(CancelWorkflowRunResponse {
+        message: "Workflow run cancelled".to_owned(),
     }))
 }
 
@@ -1188,8 +1400,8 @@ mod tests {
         contracts::{
             AgentMessages, AgentSummary, FinishReason, GenerateRequest, GenerateResponse,
             GenerateStreamEvent, GenerateStreamFinishEvent, GenerateStreamStartEvent,
-            GenerateStreamTextDeltaEvent, StartWorkflowRunRequest, WorkflowRunStatus,
-            WorkflowSummary,
+            GenerateStreamTextDeltaEvent, ResumeWorkflowRunRequest, StartWorkflowRunRequest,
+            WorkflowRunStatus, WorkflowSummary,
         },
         registry::RuntimeRegistry,
         runtime::{AgentRuntime, WorkflowRuntime},
@@ -2012,6 +2224,180 @@ mod tests {
             .unwrap();
 
         assert_eq!(fetch_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn resumes_workflow_runs_asynchronously() {
+        let registry = RuntimeRegistry::new();
+        registry.register_workflow(JsonWorkflow);
+        let router = MastraServer::new(registry.clone()).into_router();
+        let run_id = "018f7f26-8b7e-7c9d-b145-2c3d4e5f6791";
+
+        let created = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/demo/create-run")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "runId": run_id,
+                            "resourceId": "resource-resume",
+                            "inputData": {"topic": "draft"}
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+
+        let resumed = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/demo/resume-async")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&ResumeWorkflowRunRequest {
+                            run_id: Some(run_id.to_owned()),
+                            step: None,
+                            resume_data: Some(json!({"topic": "resumed"})),
+                            request_context: Default::default(),
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resumed.status(), StatusCode::OK);
+        let payload: Value =
+            serde_json::from_slice(&to_bytes(resumed.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(payload["run"]["status"], json!(WorkflowRunStatus::Success));
+        assert_eq!(payload["run"]["resource_id"], json!("resource-resume"));
+        assert_eq!(
+            payload["run"]["result"]["input"],
+            json!({"topic": "resumed"})
+        );
+
+        let stored_run = registry
+            .get_workflow_run("demo", Uuid::parse_str(run_id).unwrap())
+            .unwrap();
+        assert_eq!(stored_run.status, WorkflowRunStatus::Success);
+        assert_eq!(stored_run.input_data, Some(json!({"topic": "resumed"})));
+    }
+
+    #[tokio::test]
+    async fn resumes_workflow_runs_synchronously() {
+        let registry = RuntimeRegistry::new();
+        registry.register_workflow(JsonWorkflow);
+        let router = MastraServer::new(registry.clone()).into_router();
+        let run_id = "018f7f26-8b7e-7c9d-b145-2c3d4e5f6792";
+
+        let _ = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/demo/create-run")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "runId": run_id,
+                            "resourceId": "resource-sync-resume",
+                            "inputData": {"topic": "draft"}
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let resumed = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/demo/resume")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&ResumeWorkflowRunRequest {
+                            run_id: Some(run_id.to_owned()),
+                            step: None,
+                            resume_data: Some(json!({"topic": "sync"})),
+                            request_context: Default::default(),
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resumed.status(), StatusCode::OK);
+        let payload: Value =
+            serde_json::from_slice(&to_bytes(resumed.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(payload["message"], json!("Workflow run resumed"));
+        assert_eq!(payload["run"]["status"], json!(WorkflowRunStatus::Success));
+    }
+
+    #[tokio::test]
+    async fn cancels_workflow_runs() {
+        let registry = RuntimeRegistry::new();
+        registry.register_workflow(JsonWorkflow);
+        let router = MastraServer::new(registry.clone()).into_router();
+        let run_id = "018f7f26-8b7e-7c9d-b145-2c3d4e5f6793";
+
+        let _ = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/demo/create-run")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "runId": run_id,
+                            "resourceId": "resource-cancel",
+                            "inputData": {"topic": "draft"}
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let cancelled = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/workflows/demo/runs/{run_id}/cancel"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(cancelled.status(), StatusCode::OK);
+        let payload: Value =
+            serde_json::from_slice(&to_bytes(cancelled.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(payload["message"], json!("Workflow run cancelled"));
+
+        let stored_run = registry
+            .get_workflow_run("demo", Uuid::parse_str(run_id).unwrap())
+            .unwrap();
+        assert_eq!(stored_run.status, WorkflowRunStatus::Cancelled);
     }
 
     #[tokio::test]

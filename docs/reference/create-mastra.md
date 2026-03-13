@@ -18,6 +18,13 @@ Current command surface:
 
 - `Cargo.toml`
 - `src/main.rs`
+- `src/mastra/mastra.json`
+- `src/mastra/memories/default-memory.json`
+- `src/mastra/tools/demo-sum.json`
+- `src/mastra/agents/demo-agent.json`
+- `src/mastra/agents/demo-agent.md`
+- `src/mastra/workflows/demo-workflow.json`
+- `src/mastra/resources/hello.txt`
 - `README.md`
 - `.env.example`
 
@@ -30,12 +37,31 @@ The generated project is intentionally small and only uses crates that already e
 - `mastra-loggers`
 - `tokio`
 
+Generated `src/mastra/mastra.json` is a graph manifest with `schema_version`, path references, and per-node JSON assets. The current Rust CLI loader can consume that graph directly for `mastra lint`, `mastra dev`, and `mastra build`.
+
 Generated `src/main.rs` currently:
 
 - creates a real `Agent`
 - uses `StaticModel::echo()`
 - enables `Memory::in_memory()`
 - executes one sample `agent.generate(...)` call
+- embeds the generated graph assets with `include_str!`
+
+Generated graph assets currently include:
+
+- one default in-memory memory node
+- one sum tool node
+- one echo agent whose instructions live in `demo-agent.md`
+- one workflow with `static_json` and `tool` steps
+
+## CLI Compatibility
+
+The generated starter is intentionally aligned with the current Rust CLI subset:
+
+- `mastra create` and `mastra init` delegate to this crate
+- `mastra lint` validates the generated graph
+- `mastra build` writes `.mastra/output/bundle.json` and `routes.txt`
+- `mastra start` can boot from the produced bundle
 
 ## What This Is Not Yet
 

@@ -1377,11 +1377,16 @@ dependencies = [
 name = "mastra-cli"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "clap",
  "create-mastra",
  "mastra-core",
  "mastra-loggers",
+ "mastra-memory",
  "mastra-server",
+ "mastra-store-libsql",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
 ]

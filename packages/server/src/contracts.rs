@@ -416,6 +416,21 @@ pub struct StartWorkflowRunRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResumeWorkflowRunRequest {
+    #[serde(default)]
+    #[serde(alias = "runId")]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub step: Option<Value>,
+    #[serde(default)]
+    #[serde(alias = "resumeData")]
+    pub resume_data: Option<Value>,
+    #[serde(default)]
+    #[serde(alias = "requestContext")]
+    pub request_context: IndexMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkflowStreamStartEvent {
     pub run_id: String,
     pub workflow_id: String,
@@ -465,8 +480,10 @@ impl WorkflowStreamEvent {
 pub enum WorkflowRunStatus {
     Created,
     Running,
+    Suspended,
     Success,
     Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -530,8 +547,20 @@ pub struct StartWorkflowRunResponse {
     pub run: WorkflowRunRecord,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResumeWorkflowRunResponse {
+    pub message: String,
+    #[serde(default)]
+    pub run: Option<WorkflowRunRecord>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeleteWorkflowRunResponse {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CancelWorkflowRunResponse {
     pub message: String,
 }
 

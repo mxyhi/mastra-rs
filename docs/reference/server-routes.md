@@ -47,10 +47,23 @@ Current public route surface implemented by `mastra-server`.
 - `GET /api/workflows/{workflow_id}`
 - `POST /api/workflows/{workflow_id}/create-run`
 - `POST /api/workflows/{workflow_id}/start-async`
+- `POST /api/workflows/{workflow_id}/resume`
+- `POST /api/workflows/{workflow_id}/resume-async`
+- `POST /api/workflows/{workflow_id}/resume-stream`
 - `POST /api/workflows/{workflow_id}/stream`
 - `GET /api/workflows/{workflow_id}/runs`
 - `GET /api/workflows/{workflow_id}/runs/{run_id}`
 - `DELETE /api/workflows/{workflow_id}/runs/{run_id}`
+- `POST /api/workflows/{workflow_id}/runs/{run_id}/cancel`
+
+### Resume Request Notes
+
+- `resume` / `resume-async` / `resume-stream` accept `runId`, optional `step`,
+  optional `resumeData`, and optional `requestContext`.
+- The current Rust runtime does not implement upstream suspend/resume
+  checkpoints yet; it restarts the stored run using `resumeData` as the next
+  `inputData` payload when supplied, otherwise it reuses the persisted
+  `input_data`.
 
 ## Misc
 
@@ -63,8 +76,7 @@ Current public route surface implemented by `mastra-server`.
 
 These upstream route families are still structural gaps in the Rust port:
 
-- workflow `resume` / `resume-async`
-- workflow cancel / time-travel
+- workflow time-travel
 - vectors
 - logs
 - telemetry

@@ -30,8 +30,16 @@ curl http://127.0.0.1:4111/api/routes
 - `mastra-cli dev`
 - `mastra-cli start`
 - `mastra-cli routes`
+- `mastra-cli build`
 
-At the moment, `dev` and `start` both boot the same `MastraHttpServer` wrapper and do not yet load a project graph from `src/mastra` or built output from `.mastra/output`. The docs call this out explicitly so the CLI documentation stays aligned with the real runtime.
+Current behavior:
+
+- `dev` loads a project graph from `src/mastra/mastra.json`, normalizes it, registers the graph into `MastraHttpServer`, and serves it
+- `build` validates the same graph and writes a normalized `.mastra/output/bundle.json` plus `routes.txt`
+- `start` loads the built bundle from `.mastra/output` and boots the same runtime from bundled data
+- `routes` prints this crate's route catalog without starting a server
+
+This is still a simplified Rust port: the CLI path now loads project graphs end to end, but it is not yet the upstream bundler/runtime/studio stack.
 
 ## Agent Execution Compatibility
 
@@ -44,9 +52,21 @@ At the moment, `dev` and `start` both boot the same `MastraHttpServer` wrapper a
 
 This crate does not yet provide the larger upstream control plane:
 
-- workflow resume or cancel routes
 - workflow time-travel
 - vector routes
 - logs routes
 - telemetry routes
 - stored MCP client management
+
+## Newly Aligned Workflow Control Routes
+
+The Rust server now exposes the main upstream workflow lifecycle routes:
+
+- `POST /api/workflows/{workflow_id}/resume`
+- `POST /api/workflows/{workflow_id}/resume-async`
+- `POST /api/workflows/{workflow_id}/resume-stream`
+- `POST /api/workflows/{workflow_id}/runs/{run_id}/cancel`
+
+Current resume semantics are intentionally simple: the server restarts the
+stored run with `resumeData` as the new `inputData` payload when provided,
+otherwise it reuses the last persisted `input_data`.

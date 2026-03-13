@@ -19,7 +19,16 @@ cargo run -p mastra-server --example minimal_server
 ```bash
 cargo run -p create-mastra -- new ./demo-app
 cd demo-app
+cargo run -p mastra-cli -- lint --root . --dir src/mastra
+cargo run -p mastra-cli -- build --root . --dir src/mastra --studio
 cargo run
+```
+
+To inspect the built starter graph and route snapshot:
+
+```bash
+cat .mastra/output/routes.txt
+cat .mastra/output/bundle.json
 ```
 
 ## MastraCode Headless

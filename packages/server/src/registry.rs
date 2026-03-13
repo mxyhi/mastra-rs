@@ -238,6 +238,41 @@ impl RuntimeRegistry {
         Ok(run)
     }
 
+    pub fn restart_workflow_run(
+        &self,
+        workflow_id: &str,
+        run_id: Uuid,
+        request: &StartWorkflowRunRequest,
+    ) -> ServerResult<WorkflowRunRecord> {
+        self.ensure_workflow_exists(workflow_id)?;
+        let mut runs = self.workflow_runs.write();
+        let record = runs.get_mut(&run_id).ok_or_else(|| ServerError::NotFound {
+            resource: "workflow run",
+            id: run_id.to_string(),
+        })?;
+
+        if record.workflow_id != workflow_id {
+            return Err(ServerError::NotFound {
+                resource: "workflow run",
+                id: run_id.to_string(),
+            });
+        }
+
+        record.status = WorkflowRunStatus::Running;
+        record.updated_at = Utc::now();
+        record.resource_id = request
+            .resource_id
+            .clone()
+            .or_else(|| record.resource_id.clone());
+        record.input_data = request
+            .input_data
+            .clone()
+            .or_else(|| record.input_data.clone());
+        record.result = None;
+        record.error = None;
+        Ok(record.clone())
+    }
+
     pub fn complete_workflow_run_success(
         &self,
         run_id: Uuid,
@@ -318,6 +353,30 @@ impl RuntimeRegistry {
 
         runs.shift_remove(&run_id);
         Ok(())
+    }
+
+    pub fn cancel_workflow_run(
+        &self,
+        workflow_id: &str,
+        run_id: Uuid,
+    ) -> ServerResult<WorkflowRunRecord> {
+        self.ensure_workflow_exists(workflow_id)?;
+        let mut runs = self.workflow_runs.write();
+        let run = runs.get_mut(&run_id).ok_or_else(|| ServerError::NotFound {
+            resource: "workflow run",
+            id: run_id.to_string(),
+        })?;
+        if run.workflow_id != workflow_id {
+            return Err(ServerError::NotFound {
+                resource: "workflow run",
+                id: run_id.to_string(),
+            });
+        }
+
+        run.status = WorkflowRunStatus::Cancelled;
+        run.updated_at = Utc::now();
+        run.error = None;
+        Ok(run.clone())
     }
 
     pub fn list_workflow_runs(

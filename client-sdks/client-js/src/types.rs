@@ -12,9 +12,9 @@ pub use mastra_server::{
     GenerateStreamEvent, GenerateStreamFinishEvent, GenerateStreamStartEvent,
     GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent, GenerateStreamToolResultEvent,
     GetMemoryThreadResponse, ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse,
-    ToolChoice, ToolChoiceMode, ToolSummary, UsageStats, WorkflowDetail, WorkflowDetailResponse,
-    WorkflowRunRecord, WorkflowRunStatus, WorkflowStreamEvent, WorkflowStreamFinishEvent,
-    WorkflowStreamStartEvent, WorkflowStreamStepEvent, WorkflowSummary,
+    ResumeWorkflowRunRequest, ToolChoice, ToolChoiceMode, ToolSummary, UsageStats, WorkflowDetail,
+    WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunStatus, WorkflowStreamEvent,
+    WorkflowStreamFinishEvent, WorkflowStreamStartEvent, WorkflowStreamStepEvent, WorkflowSummary,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -107,8 +107,20 @@ pub struct StartWorkflowRunResponse {
     pub run: WorkflowRunRecord,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResumeWorkflowRunResponse {
+    pub message: String,
+    #[serde(default)]
+    pub run: Option<WorkflowRunRecord>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeleteWorkflowRunResponse {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CancelWorkflowRunResponse {
     pub message: String,
 }
 
