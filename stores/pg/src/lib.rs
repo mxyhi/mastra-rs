@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use mastra_memory::{
     AppendMessageRequest, CloneThreadRequest, CreateThreadRequest, DeleteMessagesRequest,
     HistoryQuery, InMemoryMemoryStore, ListMessagesQuery, ListThreadsQuery, MemoryStore,
-    MemoryStoreResult, Message, MessagePage, Thread, ThreadPage,
+    MemoryStoreResult, Message, MessagePage, Thread, ThreadPage, UpdateThreadRequest,
 };
 use provider_support::ensure_not_blank;
 pub use provider_support::{
@@ -119,6 +119,10 @@ impl MemoryStore for PgStore {
 
     async fn get_thread(&self, thread_id: Uuid) -> MemoryStoreResult<Option<Thread>> {
         self.inner.get_thread(thread_id).await
+    }
+
+    async fn update_thread(&self, input: UpdateThreadRequest) -> MemoryStoreResult<Thread> {
+        self.inner.update_thread(input).await
     }
 
     async fn list_threads(&self, query: ListThreadsQuery) -> MemoryStoreResult<ThreadPage> {

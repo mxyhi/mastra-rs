@@ -12,7 +12,8 @@ use chrono::Utc;
 use futures::StreamExt;
 use mastra_core::{
     Agent, CloneThreadRequest, CreateThreadRequest, MemoryEngine, MemoryMessage,
-    MemoryRecallRequest, Tool, Workflow,
+    MemoryMessageOrder, MemoryMessageOrderField, MemoryOrderDirection, MemoryRecallRequest,
+    MemoryThreadOrder, MemoryThreadOrderField, Tool, UpdateThreadRequest, Workflow,
 };
 use tracing::instrument;
 use uuid::Uuid;
@@ -22,14 +23,16 @@ use crate::{
         AgentDetailResponse, AppendMemoryMessagesRequest, AppendMemoryMessagesResponse,
         CloneMemoryThreadRequest, CloneMemoryThreadResponse, CreateMemoryThreadRequest,
         CreateMemoryThreadResponse, CreateWorkflowRunRequest, DeleteMemoryMessagesRequest,
-        DeleteMemoryMessagesResponse, ErrorResponse, ExecuteToolRequest, ExecuteToolResponse,
-        GenerateRequest, GenerateStreamEvent, GetMemoryThreadResponse, ListAgentsResponse,
-        ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery, ListThreadsQuery,
-        ListThreadsResponse, ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse,
-        ListWorkflowsResponse, RouteDescription, StartWorkflowRunRequest, StartWorkflowRunResponse,
-        SystemPackage, SystemPackagesResponse, WorkflowDetailResponse, WorkflowRunRecord,
-        WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamQuery,
-        WorkflowStreamStartEvent, WorkflowStreamStepEvent,
+        DeleteMemoryMessagesResponse, DeleteWorkflowRunResponse, ErrorResponse, ExecuteToolRequest,
+        ExecuteToolResponse, GenerateRequest, GenerateStreamEvent, GetMemoryThreadResponse,
+        ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery,
+        ListThreadsQuery, ListThreadsResponse, ListToolsResponse, ListWorkflowRunsQuery,
+        ListWorkflowRunsResponse, ListWorkflowsResponse, MessageOrderBy, MessageOrderField,
+        OrderDirection, RouteDescription, StartWorkflowRunRequest, StartWorkflowRunResponse,
+        SystemPackage, SystemPackagesResponse, ThreadOrderBy, ThreadOrderField,
+        UpdateMemoryThreadRequest, WorkflowDetailResponse, WorkflowRunRecord, WorkflowStreamEvent,
+        WorkflowStreamFinishEvent, WorkflowStreamQuery, WorkflowStreamStartEvent,
+        WorkflowStreamStepEvent,
     },
     error::{ServerError, ServerResult},
     registry::RuntimeRegistry,
@@ -127,7 +130,9 @@ impl MastraServer {
             )
             .route(
                 "/memory/threads/{thread_id}",
-                get(get_default_memory_thread).delete(delete_default_memory_thread),
+                get(get_default_memory_thread)
+                    .patch(update_default_memory_thread)
+                    .delete(delete_default_memory_thread),
             )
             .route(
                 "/memory/threads/{thread_id}/clone",
@@ -147,7 +152,9 @@ impl MastraServer {
             )
             .route(
                 "/memory/{memory_id}/threads/{thread_id}",
-                get(get_memory_thread).delete(delete_memory_thread),
+                get(get_memory_thread)
+                    .patch(update_memory_thread)
+                    .delete(delete_memory_thread),
             )
             .route(
                 "/memory/{memory_id}/threads/{thread_id}/clone",
@@ -175,7 +182,7 @@ impl MastraServer {
             .route("/workflows/{workflow_id}/runs", get(list_workflow_runs))
             .route(
                 "/workflows/{workflow_id}/runs/{run_id}",
-                get(get_workflow_run),
+                get(get_workflow_run).delete(delete_workflow_run),
             )
             .with_state(AppState {
                 registry: self.registry.clone(),
@@ -240,6 +247,11 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
         ("POST", "/memory/threads", "Create a memory thread"),
         ("GET", "/memory/threads/{thread_id}", "Get a memory thread"),
         (
+            "PATCH",
+            "/memory/threads/{thread_id}",
+            "Update a memory thread",
+        ),
+        (
             "DELETE",
             "/memory/threads/{thread_id}",
             "Delete a memory thread",
@@ -274,6 +286,11 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
             "GET",
             "/memory/{memory_id}/threads/{thread_id}",
             "Get a memory thread",
+        ),
+        (
+            "PATCH",
+            "/memory/{memory_id}/threads/{thread_id}",
+            "Update a memory thread",
         ),
         (
             "DELETE",
@@ -330,6 +347,11 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
             "GET",
             "/workflows/{workflow_id}/runs/{run_id}",
             "Fetch a workflow run record",
+        ),
+        (
+            "DELETE",
+            "/workflows/{workflow_id}/runs/{run_id}",
+            "Delete a workflow run record",
         ),
     ]
     .into_iter()
@@ -529,12 +551,17 @@ async fn list_memory_threads_for(
     let metadata = query
         .parsed_metadata()
         .map_err(|error| ServerError::BadRequest(format!("invalid metadata filter: {error}")))?;
+    let per_page = query.parsed_per_page().map_err(ServerError::BadRequest)?;
+    let order_by = query
+        .parsed_order_by()
+        .map_err(|error| ServerError::BadRequest(format!("invalid orderBy: {error}")))?;
     let threads = memory
         .list_threads_page(mastra_core::MemoryThreadQuery {
-            resource_id: query.resource_id,
+            resource_id: query.resource_id.clone(),
             metadata,
             page: query.page,
-            per_page: query.per_page,
+            per_page,
+            order_by: order_by.map(thread_order_to_core),
         })
         .await
         .map_err(ServerError::internal)?;
@@ -543,7 +570,7 @@ async fn list_memory_threads_for(
         threads: threads.threads,
         total: threads.total,
         page: threads.page,
-        per_page: threads.per_page,
+        per_page: query.response_per_page(threads.per_page),
         has_more: threads.has_more,
     }))
 }
@@ -614,6 +641,46 @@ async fn get_memory_thread_for(
             resource: "memory thread",
             id: thread_id,
         })?;
+
+    Ok(Json(GetMemoryThreadResponse { thread }))
+}
+
+#[instrument(skip(state, request))]
+async fn update_default_memory_thread(
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
+    Json(request): Json<UpdateMemoryThreadRequest>,
+) -> ServerResult<Json<GetMemoryThreadResponse>> {
+    let memory = state.registry.find_default_memory()?;
+    update_memory_thread_for(memory, thread_id, request).await
+}
+
+#[instrument(skip(state, request))]
+async fn update_memory_thread(
+    State(state): State<AppState>,
+    Path((memory_id, thread_id)): Path<(String, String)>,
+    Json(request): Json<UpdateMemoryThreadRequest>,
+) -> ServerResult<Json<GetMemoryThreadResponse>> {
+    let memory = state.registry.find_memory(&memory_id)?;
+    update_memory_thread_for(memory, thread_id, request).await
+}
+
+async fn update_memory_thread_for(
+    memory: Arc<dyn MemoryEngine>,
+    thread_id: String,
+    request: UpdateMemoryThreadRequest,
+) -> ServerResult<Json<GetMemoryThreadResponse>> {
+    let thread = memory
+        .update_thread(
+            &thread_id,
+            UpdateThreadRequest {
+                resource_id: request.resource_id,
+                title: request.title,
+                metadata: request.metadata,
+            },
+        )
+        .await
+        .map_err(ServerError::internal)?;
 
     Ok(Json(GetMemoryThreadResponse { thread }))
 }
@@ -701,6 +768,7 @@ async fn clone_memory_thread_for(
             message_ids: None,
             start_date: None,
             end_date: None,
+            order_by: None,
         })
         .await
         .map_err(ServerError::internal)?;
@@ -786,16 +854,21 @@ async fn list_memory_messages_for(
     thread_id: String,
     query: ListMessagesQuery,
 ) -> ServerResult<Json<ListMemoryMessagesResponse>> {
+    let per_page = query.parsed_per_page().map_err(ServerError::BadRequest)?;
+    let order_by = query
+        .parsed_order_by()
+        .map_err(|error| ServerError::BadRequest(format!("invalid orderBy: {error}")))?;
     let messages = memory
         .list_messages_page(MemoryRecallRequest {
             thread_id,
             limit: None,
-            resource_id: query.resource_id,
+            resource_id: query.resource_id.clone(),
             page: query.page,
-            per_page: query.per_page,
-            message_ids: query.message_ids,
+            per_page,
+            message_ids: query.message_ids.clone(),
             start_date: query.start_date,
             end_date: query.end_date,
+            order_by: order_by.map(message_order_to_core),
         })
         .await
         .map_err(ServerError::internal)?;
@@ -804,7 +877,7 @@ async fn list_memory_messages_for(
         messages: messages.messages,
         total: messages.total,
         page: messages.page,
-        per_page: messages.per_page,
+        per_page: query.response_per_page(messages.per_page),
         has_more: messages.has_more,
     }))
 }
@@ -1005,6 +1078,21 @@ async fn get_workflow_run(
     Ok(Json(run))
 }
 
+#[instrument(skip(state))]
+async fn delete_workflow_run(
+    State(state): State<AppState>,
+    Path((workflow_id, run_id)): Path<(String, String)>,
+) -> ServerResult<Json<DeleteWorkflowRunResponse>> {
+    let parsed_run_id =
+        Uuid::parse_str(&run_id).map_err(|error| ServerError::BadRequest(error.to_string()))?;
+    state
+        .registry
+        .delete_workflow_run(&workflow_id, parsed_run_id)?;
+    Ok(Json(DeleteWorkflowRunResponse {
+        message: "Workflow run deleted".to_owned(),
+    }))
+}
+
 fn encode_stream_event(event: GenerateStreamEvent) -> Event {
     let data = serde_json::to_string(&event).unwrap_or_else(|error| {
         serde_json::json!({
@@ -1017,6 +1105,31 @@ fn encode_stream_event(event: GenerateStreamEvent) -> Event {
     });
 
     Event::default().event(event.event_name()).data(data)
+}
+
+fn thread_order_to_core(order: ThreadOrderBy) -> MemoryThreadOrder {
+    MemoryThreadOrder {
+        field: match order.field {
+            ThreadOrderField::CreatedAt => MemoryThreadOrderField::CreatedAt,
+            ThreadOrderField::UpdatedAt => MemoryThreadOrderField::UpdatedAt,
+        },
+        direction: match order.direction {
+            OrderDirection::Asc => MemoryOrderDirection::Asc,
+            OrderDirection::Desc => MemoryOrderDirection::Desc,
+        },
+    }
+}
+
+fn message_order_to_core(order: MessageOrderBy) -> MemoryMessageOrder {
+    MemoryMessageOrder {
+        field: match order.field {
+            MessageOrderField::CreatedAt => MemoryMessageOrderField::CreatedAt,
+        },
+        direction: match order.direction {
+            OrderDirection::Asc => MemoryOrderDirection::Asc,
+            OrderDirection::Desc => MemoryOrderDirection::Desc,
+        },
+    }
 }
 
 fn encode_workflow_stream_event(event: WorkflowStreamEvent) -> Event {
@@ -1063,7 +1176,7 @@ mod tests {
         Agent, AgentConfig, CloneThreadRequest, CreateThreadRequest,
         FinishReason as CoreFinishReason, MemoryConfig, MemoryEngine, MemoryMessage,
         MemoryRecallRequest, MemoryRole, ModelRequest, ModelResponse, ModelToolCall, StaticModel,
-        Thread, Tool,
+        Thread, Tool, UpdateThreadRequest,
     };
     use parking_lot::RwLock;
     use serde_json::{Value, json};
@@ -1190,11 +1303,13 @@ mod tests {
     #[async_trait]
     impl MemoryEngine for TestMemory {
         async fn create_thread(&self, request: CreateThreadRequest) -> mastra_core::Result<Thread> {
+            let now = Utc::now();
             let thread = Thread {
                 id: request.id.unwrap_or_else(|| Uuid::now_v7().to_string()),
                 resource_id: request.resource_id,
                 title: request.title,
-                created_at: Utc::now(),
+                created_at: now,
+                updated_at: now,
                 metadata: request.metadata,
             };
             self.threads
@@ -1206,6 +1321,30 @@ mod tests {
 
         async fn get_thread(&self, thread_id: &str) -> mastra_core::Result<Option<Thread>> {
             Ok(self.threads.read().get(thread_id).cloned())
+        }
+
+        async fn update_thread(
+            &self,
+            thread_id: &str,
+            request: UpdateThreadRequest,
+        ) -> mastra_core::Result<Thread> {
+            let mut threads = self.threads.write();
+            let thread = threads.get_mut(thread_id).ok_or_else(|| {
+                mastra_core::MastraError::not_found(format!("thread '{thread_id}' was not found"))
+            })?;
+
+            if let Some(resource_id) = request.resource_id {
+                thread.resource_id = Some(resource_id);
+            }
+            if let Some(title) = request.title {
+                thread.title = Some(title);
+            }
+            if let Some(metadata) = request.metadata {
+                thread.metadata = metadata;
+            }
+            thread.updated_at = Utc::now();
+
+            Ok(thread.clone())
         }
 
         async fn list_threads(
@@ -1299,13 +1438,15 @@ mod tests {
                     ))
                 })?;
 
+            let now = Utc::now();
             let cloned_thread = Thread {
                 id: request
                     .new_thread_id
                     .unwrap_or_else(|| Uuid::now_v7().to_string()),
                 resource_id: request.resource_id.or(source_thread.resource_id),
                 title: request.title.or(source_thread.title),
-                created_at: Utc::now(),
+                created_at: now,
+                updated_at: now,
                 metadata: request.metadata.unwrap_or(source_thread.metadata),
             };
 
@@ -2463,8 +2604,12 @@ mod tests {
             .await
             .unwrap();
         let list_before_payload: Value = serde_json::from_slice(&list_before_body).unwrap();
-        let deleted_message_id = list_before_payload["messages"][1]["id"]
-            .as_str()
+        let deleted_message_id = list_before_payload["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["content"] == "delete me")
+            .and_then(|message| message["id"].as_str())
             .unwrap()
             .to_owned();
 
@@ -2586,8 +2731,12 @@ mod tests {
             .await
             .unwrap();
         let list_before_payload: Value = serde_json::from_slice(&list_before_body).unwrap();
-        let deleted_message_id = list_before_payload["messages"][0]["id"]
-            .as_str()
+        let deleted_message_id = list_before_payload["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["content"] == "first")
+            .and_then(|message| message["id"].as_str())
             .unwrap()
             .to_owned();
 
@@ -2634,8 +2783,75 @@ mod tests {
             .unwrap();
         let list_after_payload: Value = serde_json::from_slice(&list_after_body).unwrap();
         assert_eq!(list_after_payload["messages"].as_array().unwrap().len(), 2);
-        assert_eq!(list_after_payload["messages"][0]["content"], "second");
-        assert_eq!(list_after_payload["messages"][1]["content"], "third");
+        assert_eq!(list_after_payload["messages"][0]["content"], "third");
+        assert_eq!(list_after_payload["messages"][1]["content"], "second");
+    }
+
+    #[tokio::test]
+    async fn updates_default_memory_threads_with_patch_route() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_memory("default", Arc::new(TestMemory::default()));
+        let router = server.into_router();
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/threads")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-before",
+                            "title": "Before",
+                            "metadata": { "scope": "before" }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::OK);
+
+        let create_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let create_payload: Value = serde_json::from_slice(&create_body).unwrap();
+        let thread_id = create_payload["thread"]["id"].as_str().unwrap().to_owned();
+        let created_at = create_payload["thread"]["created_at"].clone();
+
+        let update_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/memory/threads/{thread_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-after",
+                            "title": "After",
+                            "metadata": { "scope": "after" }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(update_response.status(), StatusCode::OK);
+        let update_body = to_bytes(update_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let update_payload: Value = serde_json::from_slice(&update_body).unwrap();
+        assert_eq!(update_payload["thread"]["id"], thread_id);
+        assert_eq!(update_payload["thread"]["resource_id"], "resource-after");
+        assert_eq!(update_payload["thread"]["title"], "After");
+        assert_eq!(update_payload["thread"]["metadata"]["scope"], "after");
+        assert_eq!(update_payload["thread"]["created_at"], created_at);
+        assert!(update_payload["thread"]["updated_at"].is_string());
     }
 
     #[tokio::test]
@@ -2809,11 +3025,191 @@ mod tests {
             .unwrap();
         let list_payload: Value = serde_json::from_slice(&list_body).unwrap();
         assert_eq!(list_payload["messages"].as_array().unwrap().len(), 1);
-        assert_eq!(list_payload["messages"][0]["content"], "second");
+        assert_eq!(list_payload["messages"][0]["content"], "first");
         assert_eq!(list_payload["total"], 2);
         assert_eq!(list_payload["page"], 1);
         assert_eq!(list_payload["per_page"], 1);
         assert_eq!(list_payload["has_more"], false);
+    }
+
+    #[tokio::test]
+    async fn lists_memory_threads_with_ordering_and_per_page_false() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_memory("default", Arc::new(TestMemory::default()));
+        let router = server.into_router();
+
+        let first_create = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/threads")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-order",
+                            "title": "Older but updated later",
+                            "metadata": { "scope": "ordered" }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let first_body = to_bytes(first_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let first_payload: Value = serde_json::from_slice(&first_body).unwrap();
+        let first_thread_id = first_payload["thread"]["id"].as_str().unwrap().to_owned();
+
+        let second_create = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/threads")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-order",
+                            "title": "Newer but not updated",
+                            "metadata": { "scope": "ordered" }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second_create.status(), StatusCode::OK);
+
+        let updated = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/memory/threads/{first_thread_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "title": "Older but updated later",
+                            "metadata": { "scope": "ordered", "status": "updated" }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.status(), StatusCode::OK);
+
+        let ordered = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/memory/threads?resourceId=resource-order&metadata=%7B%22scope%22%3A%22ordered%22%7D&perPage=false&orderBy=%7B%22field%22%3A%22updatedAt%22%2C%22direction%22%3A%22ASC%22%7D")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ordered.status(), StatusCode::OK);
+
+        let ordered_body = to_bytes(ordered.into_body(), usize::MAX).await.unwrap();
+        let ordered_payload: Value = serde_json::from_slice(&ordered_body).unwrap();
+        let titles = ordered_payload["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|thread| thread["title"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            titles,
+            vec![
+                "Newer but not updated".to_owned(),
+                "Older but updated later".to_owned()
+            ]
+        );
+        assert_eq!(ordered_payload["per_page"], false);
+        assert_eq!(ordered_payload["total"], 2);
+    }
+
+    #[tokio::test]
+    async fn lists_memory_messages_with_ordering_and_per_page_false() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_memory("default", Arc::new(TestMemory::default()));
+        let router = server.into_router();
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/threads")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-message-order",
+                            "title": "Message ordering",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let create_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let create_payload: Value = serde_json::from_slice(&create_body).unwrap();
+        let thread_id = create_payload["thread"]["id"].as_str().unwrap().to_owned();
+
+        let append_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/memory/threads/{thread_id}/messages"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages": [
+                                { "role": "user", "content": "first" },
+                                { "role": "assistant", "content": "second" }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(append_response.status(), StatusCode::OK);
+
+        let ordered = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/memory/threads/{thread_id}/messages?perPage=false&orderBy=%7B%22field%22%3A%22createdAt%22%2C%22direction%22%3A%22ASC%22%7D"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ordered.status(), StatusCode::OK);
+
+        let ordered_body = to_bytes(ordered.into_body(), usize::MAX).await.unwrap();
+        let ordered_payload: Value = serde_json::from_slice(&ordered_body).unwrap();
+        let contents = ordered_payload["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|message| message["content"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(contents, vec!["first".to_owned(), "second".to_owned()]);
+        assert_eq!(ordered_payload["per_page"], false);
+        assert_eq!(ordered_payload["total"], 2);
     }
 
     #[tokio::test]
@@ -2865,6 +3261,7 @@ mod tests {
                 message_ids: Some(vec![second_id.clone()]),
                 start_date: None,
                 end_date: None,
+                order_by: None,
             },
         )
         .await
@@ -3037,5 +3434,67 @@ mod tests {
         let paged_payload: Value = serde_json::from_slice(&paged_body).unwrap();
         assert_eq!(paged_payload["total"], 2);
         assert_eq!(paged_payload["runs"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn creates_and_deletes_workflow_runs_with_explicit_run_id() {
+        let registry = RuntimeRegistry::new();
+        registry.register_workflow(JsonWorkflow);
+        let router = MastraServer::new(registry).into_router();
+        let run_id = "018f7f26-8b7e-7c9d-b145-2c3d4e5f6790";
+
+        let created = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/demo/create-run")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "runId": run_id,
+                            "resourceId": "resource-explicit",
+                            "inputData": { "topic": "custom" },
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+
+        let created_body = to_bytes(created.into_body(), usize::MAX).await.unwrap();
+        let created_payload: Value = serde_json::from_slice(&created_body).unwrap();
+        assert_eq!(created_payload["run_id"], run_id);
+        assert_eq!(created_payload["status"], "created");
+
+        let deleted = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/workflows/demo/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(deleted.status(), StatusCode::OK);
+
+        let deleted_body = to_bytes(deleted.into_body(), usize::MAX).await.unwrap();
+        let deleted_payload: Value = serde_json::from_slice(&deleted_body).unwrap();
+        assert_eq!(deleted_payload["message"], "Workflow run deleted");
+
+        let missing = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/workflows/demo/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     }
 }

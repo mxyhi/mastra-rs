@@ -16,12 +16,13 @@ use crate::{
     types::{
         AgentDetailResponse, AppendMemoryMessagesRequest, AppendMemoryMessagesResponse,
         CreateMemoryThreadRequest, CreateMemoryThreadResponse, CreateWorkflowRunRequest,
-        DeleteMemoryMessagesRequest, DeleteMemoryMessagesResponse, ErrorResponse,
-        ExecuteToolRequest, ExecuteToolResponse, GenerateRequest, GenerateResponse,
+        DeleteMemoryMessagesRequest, DeleteMemoryMessagesResponse, DeleteWorkflowRunResponse,
+        ErrorResponse, ExecuteToolRequest, ExecuteToolResponse, GenerateRequest, GenerateResponse,
         GenerateStreamEvent, GetMemoryThreadResponse, ListAgentsResponse, ListMemoriesResponse,
         ListMemoryMessagesResponse, ListMessagesQuery, ListThreadsQuery, ListThreadsResponse,
         ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse, ListWorkflowsResponse,
-        StartWorkflowRunRequest, StartWorkflowRunResponse, SystemPackagesResponse, ToolSummary,
+        MessageOrderBy, PaginationSizeValue, StartWorkflowRunRequest, StartWorkflowRunResponse,
+        SystemPackagesResponse, ThreadOrderBy, ToolSummary, UpdateMemoryThreadRequest,
         WorkflowDetailResponse, WorkflowRunRecord, WorkflowStreamEvent,
     },
 };
@@ -463,6 +464,13 @@ impl WorkflowClient {
             .await
     }
 
+    pub async fn run_by_id(
+        &self,
+        run_id: impl std::fmt::Display,
+    ) -> Result<WorkflowRunRecord, MastraClientError> {
+        self.run(run_id).await
+    }
+
     pub async fn runs(&self) -> Result<ListWorkflowRunsResponse, MastraClientError> {
         self.runs_with_query(ListWorkflowRunsQuery::default()).await
     }
@@ -476,6 +484,19 @@ impl WorkflowClient {
                 Method::GET,
                 &format!("/workflows/{}/runs", self.workflow_id),
                 Some(&query),
+                Option::<&()>::None,
+            )
+            .await
+    }
+
+    pub async fn delete_run_by_id(
+        &self,
+        run_id: impl std::fmt::Display,
+    ) -> Result<DeleteWorkflowRunResponse, MastraClientError> {
+        self.inner
+            .request(
+                Method::DELETE,
+                &format!("/workflows/{}/runs/{}", self.workflow_id, run_id),
                 Option::<&()>::None,
             )
             .await
@@ -570,6 +591,14 @@ impl MemoryClient {
             .await
     }
 
+    pub async fn update_thread(
+        &self,
+        thread_id: &str,
+        request: UpdateMemoryThreadRequest,
+    ) -> Result<mastra_core::Thread, MastraClientError> {
+        self.thread(thread_id).update(request).await
+    }
+
     pub async fn append_messages(
         &self,
         thread_id: &str,
@@ -662,6 +691,17 @@ impl MemoryThreadClient {
         Ok(response.thread)
     }
 
+    pub async fn update(
+        &self,
+        request: UpdateMemoryThreadRequest,
+    ) -> Result<mastra_core::Thread, MastraClientError> {
+        let response: GetMemoryThreadResponse = self
+            .inner
+            .request(Method::PATCH, &self.thread_path(), Some(&request))
+            .await?;
+        Ok(response.thread)
+    }
+
     pub async fn append_messages(
         &self,
         request: AppendMemoryMessagesRequest,
@@ -679,6 +719,7 @@ impl MemoryThreadClient {
         &self,
         query: ListMessagesQuery,
     ) -> Result<ListMemoryMessagesResponse, MastraClientError> {
+        let query = MessageQueryWire::try_from(query)?;
         self.inner
             .request_with_query(
                 Method::GET,
@@ -951,11 +992,13 @@ struct ThreadQueryWire {
     #[serde(skip_serializing_if = "Option::is_none", rename = "page")]
     page: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "perPage")]
-    per_page: Option<usize>,
+    per_page: Option<PaginationSizeValue>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "resourceId")]
     resource_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "orderBy")]
+    order_by: Option<String>,
 }
 
 impl TryFrom<ListThreadsQuery> for ThreadQueryWire {
@@ -972,12 +1015,64 @@ impl TryFrom<ListThreadsQuery> for ThreadQueryWire {
                 })
             })
             .transpose()?;
+        let order_by = query.order_by.map(serialize_thread_order_by).transpose()?;
 
         Ok(Self {
             page: query.page,
             per_page: query.per_page,
             resource_id: query.resource_id,
             metadata,
+            order_by,
         })
     }
+}
+
+#[derive(Debug, Serialize)]
+struct MessageQueryWire {
+    #[serde(skip_serializing_if = "Option::is_none", rename = "page")]
+    page: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "perPage")]
+    per_page: Option<PaginationSizeValue>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "resourceId")]
+    resource_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "messageIds")]
+    message_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "startDate")]
+    start_date: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "endDate")]
+    end_date: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "orderBy")]
+    order_by: Option<String>,
+}
+
+impl TryFrom<ListMessagesQuery> for MessageQueryWire {
+    type Error = MastraClientError;
+
+    fn try_from(query: ListMessagesQuery) -> Result<Self, Self::Error> {
+        Ok(Self {
+            page: query.page,
+            per_page: query.per_page,
+            resource_id: query.resource_id,
+            message_ids: query.message_ids,
+            start_date: query.start_date,
+            end_date: query.end_date,
+            order_by: query.order_by.map(serialize_message_order_by).transpose()?,
+        })
+    }
+}
+
+fn serialize_thread_order_by(order_by: ThreadOrderBy) -> Result<String, MastraClientError> {
+    serde_json::to_string(&order_by).map_err(|error| MastraClientError::Api {
+        status: StatusCode::BAD_REQUEST,
+        body: error.to_string(),
+        error: None,
+    })
+}
+
+fn serialize_message_order_by(order_by: MessageOrderBy) -> Result<String, MastraClientError> {
+    serde_json::to_string(&order_by).map_err(|error| MastraClientError::Api {
+        status: StatusCode::BAD_REQUEST,
+        body: error.to_string(),
+        error: None,
+    })
 }

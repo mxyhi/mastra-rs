@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use mastra_memory::{
     AppendMessageRequest, CloneThreadRequest, CreateThreadRequest, DeleteMessagesRequest,
     HistoryQuery, ListMessagesQuery, ListThreadsQuery, MemoryStore, MemoryStoreError,
-    MemoryStoreResult, Message, MessagePage, MessageRole, Thread, ThreadPage,
+    MemoryStoreResult, Message, MessagePage, MessageRole, Thread, ThreadPage, UpdateThreadRequest,
     ensure_valid_pagination,
 };
 use provider_support::ensure_not_blank;
@@ -171,6 +171,37 @@ impl MemoryStore for LibSqlStore {
         .map_err(map_sqlx_error)?;
 
         row.map(thread_from_row).transpose()
+    }
+
+    async fn update_thread(&self, input: UpdateThreadRequest) -> MemoryStoreResult<Thread> {
+        let pool = self.pool().await?;
+        let thread = self
+            .get_thread(input.thread_id)
+            .await?
+            .ok_or(MemoryStoreError::ThreadNotFound(input.thread_id))?;
+        let updated = Thread {
+            id: thread.id,
+            resource_id: input.resource_id.unwrap_or(thread.resource_id),
+            title: input.title.unwrap_or(thread.title),
+            metadata: input.metadata.unwrap_or(thread.metadata),
+            created_at: thread.created_at,
+            updated_at: Utc::now(),
+        };
+
+        sqlx::query(
+            "UPDATE threads SET resource_id = ?, title = ?, metadata = ?, updated_at = ? \
+             WHERE id = ?",
+        )
+        .bind(&updated.resource_id)
+        .bind(&updated.title)
+        .bind(json_to_string(&updated.metadata)?)
+        .bind(timestamp_to_string(updated.updated_at))
+        .bind(updated.id.to_string())
+        .execute(pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        Ok(updated)
     }
 
     async fn list_threads(&self, query: ListThreadsQuery) -> MemoryStoreResult<ThreadPage> {

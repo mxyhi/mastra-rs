@@ -51,6 +51,25 @@ impl CreateThreadRequest {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct UpdateThreadRequest {
+    pub thread_id: Uuid,
+    pub resource_id: Option<String>,
+    pub title: Option<String>,
+    pub metadata: Option<Value>,
+}
+
+impl UpdateThreadRequest {
+    pub fn new(thread_id: Uuid) -> Self {
+        Self {
+            thread_id,
+            resource_id: None,
+            title: None,
+            metadata: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AppendMessageRequest {
     pub message_id: Option<Uuid>,
     pub thread_id: Uuid,

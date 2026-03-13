@@ -3,7 +3,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use mastra_core::{
     CreateThreadRequest as CoreCreateThreadRequest, MemoryConfig, MemoryEngine, MemoryMessage,
-    MemoryRole,
+    MemoryRole, UpdateThreadRequest as CoreUpdateThreadRequest,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -168,6 +168,7 @@ async fn bridge_implements_core_memory_engine() {
             message_ids: None,
             start_date: None,
             end_date: None,
+            order_by: None,
         },
     )
     .await
@@ -179,6 +180,42 @@ async fn bridge_implements_core_memory_engine() {
 
     let _ = Arc::new(memory) as Arc<dyn MemoryEngine>;
     let _ = MemoryConfig::default();
+}
+
+#[tokio::test]
+async fn bridge_updates_threads_and_preserves_created_at() {
+    let memory = Memory::new(InMemoryMemoryStore::default());
+    let thread = MemoryEngine::create_thread(
+        &memory,
+        CoreCreateThreadRequest {
+            id: None,
+            resource_id: Some("resource-before".into()),
+            title: Some("Before".into()),
+            metadata: json!({ "scope": "before" }),
+        },
+    )
+    .await
+    .expect("thread should be created");
+
+    let updated = MemoryEngine::update_thread(
+        &memory,
+        &thread.id,
+        CoreUpdateThreadRequest {
+            resource_id: Some("resource-after".into()),
+            title: Some("After".into()),
+            metadata: Some(json!({ "scope": "after" })),
+        },
+    )
+    .await
+    .expect("thread should be updated");
+
+    assert_eq!(updated.id, thread.id);
+    assert_eq!(updated.resource_id.as_deref(), Some("resource-after"));
+    assert_eq!(updated.title.as_deref(), Some("After"));
+    assert_eq!(updated.metadata, json!({ "scope": "after" }));
+    assert_eq!(updated.created_at, thread.created_at);
+    assert!(updated.updated_at >= thread.updated_at);
+    assert!(updated.updated_at >= updated.created_at);
 }
 
 #[tokio::test]
@@ -251,6 +288,7 @@ async fn bridge_deletes_messages_by_id_without_thread_context() {
             message_ids: None,
             start_date: None,
             end_date: None,
+            order_by: None,
         },
     )
     .await
@@ -266,6 +304,7 @@ async fn bridge_deletes_messages_by_id_without_thread_context() {
             message_ids: None,
             start_date: None,
             end_date: None,
+            order_by: None,
         },
     )
     .await

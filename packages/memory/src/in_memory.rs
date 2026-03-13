@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::model::{
     AppendMessageRequest, CloneThreadRequest, CreateThreadRequest, DeleteMessagesRequest,
     HistoryQuery, ListMessagesQuery, ListThreadsQuery, Message, MessagePage, Thread, ThreadPage,
+    UpdateThreadRequest,
 };
 use crate::store::{MemoryStore, MemoryStoreError, MemoryStoreResult, ensure_valid_pagination};
 
@@ -46,6 +47,27 @@ impl MemoryStore for InMemoryMemoryStore {
     async fn get_thread(&self, thread_id: Uuid) -> MemoryStoreResult<Option<Thread>> {
         let state = self.state.read();
         Ok(state.threads.get(&thread_id).cloned())
+    }
+
+    async fn update_thread(&self, input: UpdateThreadRequest) -> MemoryStoreResult<Thread> {
+        let mut state = self.state.write();
+        let thread = state
+            .threads
+            .get_mut(&input.thread_id)
+            .ok_or(MemoryStoreError::ThreadNotFound(input.thread_id))?;
+
+        if let Some(resource_id) = input.resource_id {
+            thread.resource_id = resource_id;
+        }
+        if let Some(title) = input.title {
+            thread.title = title;
+        }
+        if let Some(metadata) = input.metadata {
+            thread.metadata = metadata;
+        }
+        thread.updated_at = Utc::now();
+
+        Ok(thread.clone())
     }
 
     async fn list_threads(&self, query: ListThreadsQuery) -> MemoryStoreResult<ThreadPage> {

@@ -30,6 +30,7 @@ pub struct Thread {
     pub resource_id: Option<String>,
     pub title: Option<String>,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
     pub metadata: Value,
 }
 
@@ -42,6 +43,13 @@ pub struct CreateThreadRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UpdateThreadRequest {
+    pub resource_id: Option<String>,
+    pub title: Option<String>,
+    pub metadata: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MemoryRecallRequest {
     pub thread_id: String,
     pub limit: Option<usize>,
@@ -51,6 +59,59 @@ pub struct MemoryRecallRequest {
     pub message_ids: Option<Vec<String>>,
     pub start_date: Option<DateTime<Utc>>,
     pub end_date: Option<DateTime<Utc>>,
+    pub order_by: Option<MemoryMessageOrder>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub enum MemoryOrderDirection {
+    #[serde(rename = "ASC")]
+    Asc,
+    #[serde(rename = "DESC")]
+    Desc,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub enum MemoryThreadOrderField {
+    #[serde(rename = "createdAt")]
+    CreatedAt,
+    #[serde(rename = "updatedAt")]
+    UpdatedAt,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct MemoryThreadOrder {
+    pub field: MemoryThreadOrderField,
+    pub direction: MemoryOrderDirection,
+}
+
+impl Default for MemoryThreadOrder {
+    fn default() -> Self {
+        Self {
+            field: MemoryThreadOrderField::CreatedAt,
+            direction: MemoryOrderDirection::Desc,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub enum MemoryMessageOrderField {
+    #[serde(rename = "createdAt")]
+    CreatedAt,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct MemoryMessageOrder {
+    pub field: MemoryMessageOrderField,
+    pub direction: MemoryOrderDirection,
+}
+
+impl Default for MemoryMessageOrder {
+    fn default() -> Self {
+        Self {
+            field: MemoryMessageOrderField::CreatedAt,
+            direction: MemoryOrderDirection::Desc,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -59,6 +120,7 @@ pub struct MemoryThreadQuery {
     pub metadata: Option<Value>,
     pub page: Option<usize>,
     pub per_page: Option<usize>,
+    pub order_by: Option<MemoryThreadOrder>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -113,6 +175,16 @@ pub trait MemoryEngine: Send + Sync {
 
     async fn get_thread(&self, thread_id: &str) -> Result<Option<Thread>>;
 
+    async fn update_thread(
+        &self,
+        _thread_id: &str,
+        _request: UpdateThreadRequest,
+    ) -> Result<Thread> {
+        Err(MastraError::storage(
+            "memory engine does not support thread updates",
+        ))
+    }
+
     async fn list_threads(&self, resource_id: Option<&str>) -> Result<Vec<Thread>>;
 
     async fn list_threads_page(&self, request: MemoryThreadQuery) -> Result<MemoryThreadPage> {
@@ -120,6 +192,7 @@ pub trait MemoryEngine: Send + Sync {
         if let Some(metadata) = request.metadata.as_ref() {
             threads.retain(|thread| metadata_matches(metadata, &thread.metadata));
         }
+        sort_threads(&mut threads, request.order_by.unwrap_or_default());
 
         paginate_threads(threads, request.page, request.per_page)
     }
@@ -130,7 +203,8 @@ pub trait MemoryEngine: Send + Sync {
 
     async fn list_messages_page(&self, request: MemoryRecallRequest) -> Result<MemoryMessagePage> {
         if request.page.is_none() && request.per_page.is_none() {
-            let messages = self.list_messages(request).await?;
+            let mut messages = self.list_messages(request.clone()).await?;
+            sort_messages(&mut messages, request.order_by.unwrap_or_default());
             let per_page = messages.len().max(1);
             return Ok(MemoryMessagePage {
                 total: messages.len(),
@@ -147,6 +221,8 @@ pub trait MemoryEngine: Send + Sync {
         unbounded_request.limit = None;
 
         let messages = self.list_messages(unbounded_request).await?;
+        let mut messages = messages;
+        sort_messages(&mut messages, request.order_by.unwrap_or_default());
         paginate_messages(messages, request.page, request.per_page)
     }
 
@@ -227,6 +303,35 @@ fn paginate_messages(
         page,
         per_page,
     })
+}
+
+fn sort_threads(threads: &mut [Thread], order_by: MemoryThreadOrder) {
+    threads.sort_by(|left, right| {
+        let ordering = match order_by.field {
+            MemoryThreadOrderField::CreatedAt => left.created_at.cmp(&right.created_at),
+            MemoryThreadOrderField::UpdatedAt => left.updated_at.cmp(&right.updated_at),
+        }
+        .then_with(|| left.id.cmp(&right.id));
+
+        match order_by.direction {
+            MemoryOrderDirection::Asc => ordering,
+            MemoryOrderDirection::Desc => ordering.reverse(),
+        }
+    });
+}
+
+fn sort_messages(messages: &mut [MemoryMessage], order_by: MemoryMessageOrder) {
+    messages.sort_by(|left, right| {
+        let ordering = match order_by.field {
+            MemoryMessageOrderField::CreatedAt => left.created_at.cmp(&right.created_at),
+        }
+        .then_with(|| left.id.cmp(&right.id));
+
+        match order_by.direction {
+            MemoryOrderDirection::Asc => ordering,
+            MemoryOrderDirection::Desc => ordering.reverse(),
+        }
+    });
 }
 
 fn metadata_matches(filter: &Value, candidate: &Value) -> bool {

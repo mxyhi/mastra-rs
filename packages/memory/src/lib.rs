@@ -17,7 +17,7 @@ pub use in_memory::InMemoryMemoryStore;
 pub use model::{
     AppendMessageRequest, CloneThreadRequest, CreateThreadRequest, DeleteMessagesRequest,
     HistoryQuery, ListMessagesQuery, ListThreadsQuery, Message, MessagePage, MessageRole,
-    Pagination, Thread, ThreadPage,
+    Pagination, Thread, ThreadPage, UpdateThreadRequest,
 };
 pub use store::{MemoryStore, MemoryStoreError, MemoryStoreResult, ensure_valid_pagination};
 
@@ -50,6 +50,10 @@ impl Memory {
 
     pub async fn get_thread(&self, thread_id: Uuid) -> MemoryStoreResult<Option<Thread>> {
         self.store.get_thread(thread_id).await
+    }
+
+    pub async fn update_thread(&self, input: UpdateThreadRequest) -> MemoryStoreResult<Thread> {
+        self.store.update_thread(input).await
     }
 
     pub async fn list_threads(&self, query: ListThreadsQuery) -> MemoryStoreResult<ThreadPage> {
@@ -111,6 +115,26 @@ impl MemoryEngine for Memory {
             .await
             .map(|thread| thread.map(thread_to_core))
             .map_err(map_store_error)
+    }
+
+    async fn update_thread(
+        &self,
+        thread_id: &str,
+        request: mastra_core::UpdateThreadRequest,
+    ) -> mastra_core::Result<CoreThread> {
+        let thread_id = parse_uuid(thread_id, "thread id")?;
+        let thread = self
+            .store
+            .update_thread(UpdateThreadRequest {
+                thread_id,
+                resource_id: request.resource_id,
+                title: request.title,
+                metadata: request.metadata,
+            })
+            .await
+            .map_err(map_store_error)?;
+
+        Ok(thread_to_core(thread))
     }
 
     async fn list_threads(
@@ -321,6 +345,7 @@ fn thread_to_core(thread: Thread) -> CoreThread {
         resource_id: Some(thread.resource_id),
         title: Some(thread.title),
         created_at: thread.created_at,
+        updated_at: thread.updated_at,
         metadata: thread.metadata,
     }
 }

@@ -15,8 +15,9 @@ pub use error::{MastraError, MastraErrorCode, Result};
 pub use mastra::{Mastra, MastraBuilder};
 pub use memory::{
     CloneThreadRequest, CreateThreadRequest, MemoryConfig, MemoryEngine, MemoryMessage,
-    MemoryMessagePage, MemoryRecallRequest, MemoryRole, MemoryThreadPage, MemoryThreadQuery,
-    Thread,
+    MemoryMessageOrder, MemoryMessageOrderField, MemoryMessagePage, MemoryOrderDirection,
+    MemoryRecallRequest, MemoryRole, MemoryThreadOrder, MemoryThreadOrderField, MemoryThreadPage,
+    MemoryThreadQuery, Thread, UpdateThreadRequest,
 };
 pub use model::{
     FinishReason, LanguageModel, ModelEvent, ModelRequest, ModelResponse, ModelToolCall,

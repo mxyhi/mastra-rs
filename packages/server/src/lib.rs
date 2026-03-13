@@ -12,15 +12,16 @@ use registry::RuntimeRegistry;
 use runtime::{CoreAgentRuntime, CoreWorkflowRuntime};
 
 pub use contracts::{
-    AgentDetail, AgentDetailResponse, AgentMessages, AgentSummary, ChatMessage, ErrorResponse,
-    ExecuteToolRequest, ExecuteToolResponse, FinishReason, GenerateResponse, GenerateStreamEvent,
-    GenerateStreamFinishEvent, GenerateStreamStartEvent, GenerateStreamTextDeltaEvent,
-    GenerateStreamToolCallEvent, GenerateStreamToolResultEvent, GetMemoryThreadResponse,
-    ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse, RouteDescription,
+    AgentDetail, AgentDetailResponse, AgentMessages, AgentSummary, ChatMessage,
+    DeleteWorkflowRunResponse, ErrorResponse, ExecuteToolRequest, ExecuteToolResponse,
+    FinishReason, GenerateResponse, GenerateStreamEvent, GenerateStreamFinishEvent,
+    GenerateStreamStartEvent, GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent,
+    GenerateStreamToolResultEvent, GetMemoryThreadResponse, ListToolsResponse,
+    ListWorkflowRunsQuery, ListWorkflowRunsResponse, RouteDescription,
     StartWorkflowRunResponse as WorkflowRunResponse, SystemPackage, SystemPackagesResponse,
-    ToolSummary, UsageStats, WorkflowDetail, WorkflowDetailResponse, WorkflowRunRecord,
-    WorkflowRunStatus, WorkflowStepSummary, WorkflowStreamEvent, WorkflowStreamFinishEvent,
-    WorkflowStreamStartEvent, WorkflowStreamStepEvent, WorkflowSummary,
+    ToolSummary, UpdateMemoryThreadRequest, UsageStats, WorkflowDetail, WorkflowDetailResponse,
+    WorkflowRunRecord, WorkflowRunStatus, WorkflowStepSummary, WorkflowStreamEvent,
+    WorkflowStreamFinishEvent, WorkflowStreamStartEvent, WorkflowStreamStepEvent, WorkflowSummary,
 };
 pub use error::ServerError as MastraServerError;
 pub use registry::RuntimeRegistry as MastraRuntimeRegistry;
@@ -104,11 +105,13 @@ mod tests {
     #[async_trait]
     impl MemoryEngine for TestMemory {
         async fn create_thread(&self, request: CreateThreadRequest) -> mastra_core::Result<Thread> {
+            let now = Utc::now();
             let thread = Thread {
                 id: request.id.unwrap_or_else(|| Uuid::now_v7().to_string()),
                 resource_id: request.resource_id,
                 title: request.title,
-                created_at: Utc::now(),
+                created_at: now,
+                updated_at: now,
                 metadata: request.metadata,
             };
             self.threads
@@ -299,6 +302,7 @@ mod tests {
             .create_workflow_run(
                 "workflow-1",
                 crate::contracts::CreateWorkflowRunRequest {
+                    run_id: None,
                     resource_id: None,
                     input_data: Some(json!({"hello": "world"})),
                     request_context: RequestContext::new().values().clone(),

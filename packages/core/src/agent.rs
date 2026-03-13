@@ -387,6 +387,7 @@ impl Agent {
                 message_ids: None,
                 start_date: None,
                 end_date: None,
+                order_by: None,
             })
             .await?
             .into_iter()
@@ -577,13 +578,15 @@ mod tests {
     #[async_trait]
     impl MemoryEngine for RecordingMemory {
         async fn create_thread(&self, request: CreateThreadRequest) -> crate::Result<Thread> {
+            let now = Utc::now();
             let thread = Thread {
                 id: request
                     .id
                     .unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
                 resource_id: request.resource_id,
                 title: request.title,
-                created_at: Utc::now(),
+                created_at: now,
+                updated_at: now,
                 metadata: request.metadata,
             };
             self.threads
@@ -677,6 +680,7 @@ mod tests {
                 message_ids: None,
                 start_date: None,
                 end_date: None,
+                order_by: None,
             })
             .await
             .expect("messages should be persisted");
@@ -918,6 +922,7 @@ mod tests {
                 message_ids: None,
                 start_date: None,
                 end_date: None,
+                order_by: None,
             })
             .await
             .expect("messages should be persisted");

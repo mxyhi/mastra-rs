@@ -178,9 +178,19 @@ impl RuntimeRegistry {
     ) -> ServerResult<WorkflowRunRecord> {
         self.ensure_workflow_exists(workflow_id)?;
         let now = Utc::now();
+        let run_id = request
+            .run_id
+            .as_deref()
+            .map(|value| {
+                Uuid::parse_str(value).map_err(|error| {
+                    ServerError::BadRequest(format!("invalid runId '{value}': {error}"))
+                })
+            })
+            .transpose()?
+            .unwrap_or_else(Uuid::now_v7);
 
         let run = WorkflowRunRecord {
-            run_id: Uuid::now_v7(),
+            run_id,
             workflow_id: workflow_id.to_owned(),
             status: WorkflowRunStatus::Created,
             created_at: now,
@@ -290,6 +300,24 @@ impl RuntimeRegistry {
         }
 
         Ok(run)
+    }
+
+    pub fn delete_workflow_run(&self, workflow_id: &str, run_id: Uuid) -> ServerResult<()> {
+        self.ensure_workflow_exists(workflow_id)?;
+        let mut runs = self.workflow_runs.write();
+        let run = runs.get(&run_id).ok_or_else(|| ServerError::NotFound {
+            resource: "workflow run",
+            id: run_id.to_string(),
+        })?;
+        if run.workflow_id != workflow_id {
+            return Err(ServerError::NotFound {
+                resource: "workflow run",
+                id: run_id.to_string(),
+            });
+        }
+
+        runs.shift_remove(&run_id);
+        Ok(())
     }
 
     pub fn list_workflow_runs(

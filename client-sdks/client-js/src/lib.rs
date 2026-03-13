@@ -13,15 +13,17 @@ pub use types::{
     CloneMemoryThreadOptions, CloneMemoryThreadRequest, CloneMemoryThreadResponse,
     CreateMemoryThreadRequest, CreateMemoryThreadResponse, CreateWorkflowRunRequest,
     DeleteMemoryMessagesInput, DeleteMemoryMessagesRequest, DeleteMemoryMessagesResponse,
-    ErrorResponse, ExecuteToolRequest, ExecuteToolResponse, FinishReason, GenerateRequest,
-    GenerateResponse, GenerateStreamEvent, GenerateStreamFinishEvent, GenerateStreamStartEvent,
-    GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent, GenerateStreamToolResultEvent,
-    ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery,
-    ListThreadsQuery, ListThreadsResponse, ListToolsResponse, ListWorkflowRunsQuery,
-    ListWorkflowRunsResponse, ListWorkflowsResponse, MemoryMessageInput, MemoryMessageRole,
-    MemorySummary, RouteDescription, StartWorkflowRunRequest, StartWorkflowRunResponse,
-    SystemPackage, SystemPackagesResponse, ToolSummary, UsageStats, WorkflowDetail,
-    WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunRef, WorkflowRunStatus,
+    DeleteWorkflowRunResponse, ErrorResponse, ExecuteToolRequest, ExecuteToolResponse,
+    FinishReason, GenerateRequest, GenerateResponse, GenerateStreamEvent,
+    GenerateStreamFinishEvent, GenerateStreamStartEvent, GenerateStreamTextDeltaEvent,
+    GenerateStreamToolCallEvent, GenerateStreamToolResultEvent, ListAgentsResponse,
+    ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery, ListThreadsQuery,
+    ListThreadsResponse, ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse,
+    ListWorkflowsResponse, MemoryMessageInput, MemoryMessageRole, MemorySummary, MessageOrderBy,
+    MessageOrderField, OrderDirection, PaginationSizeValue, RouteDescription,
+    StartWorkflowRunRequest, StartWorkflowRunResponse, SystemPackage, SystemPackagesResponse,
+    ThreadOrderBy, ThreadOrderField, ToolSummary, UpdateMemoryThreadRequest, UsageStats,
+    WorkflowDetail, WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunRef, WorkflowRunStatus,
     WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamQuery, WorkflowStreamStartEvent,
     WorkflowStreamStepEvent, WorkflowSummary,
 };
@@ -46,8 +48,9 @@ mod tests {
         CreateMemoryThreadRequest, CreateWorkflowRunRequest, DeleteMemoryMessagesInput,
         DeleteMemoryMessagesRequest, ExecuteToolRequest, GenerateRequest, ListMessagesQuery,
         ListThreadsQuery, ListWorkflowRunsQuery, MastraClient, MastraClientBuilder,
-        MastraClientError, MemoryMessageInput, MemoryMessageRole, StartWorkflowRunRequest,
-        WorkflowRunStatus,
+        MastraClientError, MemoryMessageInput, MemoryMessageRole, MessageOrderBy,
+        MessageOrderField, OrderDirection, PaginationSizeValue, StartWorkflowRunRequest,
+        ThreadOrderBy, ThreadOrderField, UpdateMemoryThreadRequest, WorkflowRunStatus,
     };
 
     struct TestHarness {
@@ -145,6 +148,7 @@ mod tests {
         let created_run = client
             .workflow("demo")
             .create_run(CreateWorkflowRunRequest {
+                run_id: None,
                 resource_id: Some("resource-1".to_owned()),
                 input_data: Some(json!({"topic": "rust"})),
                 request_context: Default::default(),
@@ -298,16 +302,17 @@ mod tests {
         let paged_threads = memory
             .threads_with_query(ListThreadsQuery {
                 page: Some(0),
-                per_page: Some(1),
+                per_page: Some(PaginationSizeValue::Number(1)),
                 resource_id: Some("resource-1".to_owned()),
                 metadata: None,
+                order_by: None,
             })
             .await
             .unwrap();
         assert_eq!(paged_threads.threads.len(), 1);
         assert_eq!(paged_threads.total, 2);
         assert_eq!(paged_threads.page, 0);
-        assert_eq!(paged_threads.per_page, 1);
+        assert_eq!(paged_threads.per_page, PaginationSizeValue::Number(1));
         assert!(paged_threads.has_more);
 
         let paged_messages = memory
@@ -315,17 +320,18 @@ mod tests {
                 &first_thread.id,
                 ListMessagesQuery {
                     page: Some(1),
-                    per_page: Some(1),
+                    per_page: Some(PaginationSizeValue::Number(1)),
                     resource_id: None,
                     message_ids: None,
                     start_date: None,
                     end_date: None,
+                    order_by: None,
                 },
             )
             .await
             .unwrap();
         assert_eq!(paged_messages.messages.len(), 1);
-        assert_eq!(paged_messages.messages[0].content, "second");
+        assert_eq!(paged_messages.messages[0].content, "first");
         assert_eq!(paged_messages.total, 2);
 
         let cloned = memory
@@ -358,7 +364,7 @@ mod tests {
 
         let remaining = memory.messages(&first_thread.id).await.unwrap();
         assert_eq!(remaining.messages.len(), 1);
-        assert_eq!(remaining.messages[0].content, "first");
+        assert_eq!(remaining.messages[0].content, "second");
 
         memory.delete_thread(&cloned.thread.id).await.unwrap();
         let threads_after_delete = memory.threads().await.unwrap();
@@ -462,6 +468,7 @@ mod tests {
         let created = client
             .workflow("demo")
             .create_run(CreateWorkflowRunRequest {
+                run_id: None,
                 resource_id: Some("resource-created".to_owned()),
                 input_data: Some(json!({"topic": "draft"})),
                 request_context: Default::default(),
@@ -469,6 +476,25 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(created.status, WorkflowRunStatus::Created);
+
+        let explicit_run_id = "018f7f26-8b7e-7c9d-b145-2c3d4e5f6790";
+        let explicit = client
+            .workflow("demo")
+            .create_run(CreateWorkflowRunRequest {
+                run_id: Some(explicit_run_id.to_owned()),
+                resource_id: Some("resource-explicit".to_owned()),
+                input_data: Some(json!({"topic": "explicit"})),
+                request_context: Default::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(explicit.run_id.to_string(), explicit_run_id);
+        let explicit_fetched = client
+            .workflow("demo")
+            .run_by_id(explicit_run_id)
+            .await
+            .unwrap();
+        assert_eq!(explicit_fetched.run_id.to_string(), explicit_run_id);
 
         let started = client
             .workflow("demo")
@@ -501,6 +527,18 @@ mod tests {
         );
         assert_eq!(filtered_runs.runs[0].status, WorkflowRunStatus::Success);
 
+        let deleted_run = client
+            .workflow("demo")
+            .delete_run_by_id(explicit_run_id)
+            .await
+            .unwrap();
+        assert_eq!(deleted_run.message, "Workflow run deleted");
+        let missing_run = client.workflow("demo").run_by_id(explicit_run_id).await;
+        assert!(matches!(
+            missing_run,
+            Err(MastraClientError::Api { status, .. }) if status == reqwest::StatusCode::NOT_FOUND
+        ));
+
         let default_thread = client
             .default_memory()
             .create_thread(CreateMemoryThreadRequest {
@@ -517,20 +555,79 @@ mod tests {
         let default_thread_client = client.default_memory().thread(default_thread.id.clone());
         let fetched_default_thread = default_thread_client.get().await.unwrap();
         assert_eq!(fetched_default_thread.id, default_thread.id);
+        let updated_default_thread = default_thread_client
+            .update(UpdateMemoryThreadRequest {
+                resource_id: Some("resource-default-updated".to_owned()),
+                title: Some("Default thread updated".to_owned()),
+                metadata: Some(json!({"scope": "updated"})),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            updated_default_thread.resource_id.as_deref(),
+            Some("resource-default-updated")
+        );
+        assert_eq!(
+            updated_default_thread.title.as_deref(),
+            Some("Default thread updated")
+        );
+        assert_eq!(updated_default_thread.metadata, json!({"scope": "updated"}));
+        assert!(updated_default_thread.updated_at >= updated_default_thread.created_at);
+
+        let filtered_threads = client
+            .default_memory()
+            .threads_with_query(ListThreadsQuery {
+                page: Some(0),
+                per_page: Some(PaginationSizeValue::All(false)),
+                resource_id: Some("resource-default-updated".to_owned()),
+                metadata: Some(json!({"scope": "updated"})),
+                order_by: Some(ThreadOrderBy {
+                    field: ThreadOrderField::UpdatedAt,
+                    direction: OrderDirection::Asc,
+                }),
+            })
+            .await
+            .unwrap();
+        assert_eq!(filtered_threads.per_page, PaginationSizeValue::All(false));
+        assert_eq!(filtered_threads.threads.len(), 1);
+        assert_eq!(filtered_threads.threads[0].id, updated_default_thread.id);
 
         default_thread_client
             .append_messages(AppendMemoryMessagesRequest {
-                messages: vec![MemoryMessageInput {
-                    role: MemoryMessageRole::User,
-                    content: "default hello".to_owned(),
-                    metadata: json!({}),
-                }],
+                messages: vec![
+                    MemoryMessageInput {
+                        role: MemoryMessageRole::User,
+                        content: "default hello".to_owned(),
+                        metadata: json!({}),
+                    },
+                    MemoryMessageInput {
+                        role: MemoryMessageRole::Assistant,
+                        content: "default reply".to_owned(),
+                        metadata: json!({}),
+                    },
+                ],
             })
             .await
             .unwrap();
 
-        let default_messages = default_thread_client.messages().await.unwrap();
-        assert_eq!(default_messages.messages.len(), 1);
+        let default_messages = default_thread_client
+            .messages_with_query(ListMessagesQuery {
+                page: Some(0),
+                per_page: Some(PaginationSizeValue::All(false)),
+                resource_id: None,
+                message_ids: None,
+                start_date: None,
+                end_date: None,
+                order_by: Some(MessageOrderBy {
+                    field: MessageOrderField::CreatedAt,
+                    direction: OrderDirection::Asc,
+                }),
+            })
+            .await
+            .unwrap();
+        assert_eq!(default_messages.per_page, PaginationSizeValue::All(false));
+        assert_eq!(default_messages.messages.len(), 2);
         assert_eq!(default_messages.messages[0].content, "default hello");
+        assert_eq!(default_messages.messages[1].content, "default reply");
     }
 }

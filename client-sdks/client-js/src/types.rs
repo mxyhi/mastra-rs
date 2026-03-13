@@ -54,6 +54,9 @@ pub struct ListMemoriesResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateWorkflowRunRequest {
     #[serde(default)]
+    #[serde(alias = "runId")]
+    pub run_id: Option<String>,
+    #[serde(default)]
     pub resource_id: Option<String>,
     #[serde(default)]
     pub input_data: Option<Value>,
@@ -76,6 +79,11 @@ pub struct StartWorkflowRunResponse {
     pub run: WorkflowRunRecord,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeleteWorkflowRunResponse {
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CreateMemoryThreadRequest {
     #[serde(default)]
@@ -94,12 +102,63 @@ pub struct CreateMemoryThreadResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UpdateMemoryThreadRequest {
+    #[serde(default)]
+    #[serde(rename = "resourceId")]
+    pub resource_id: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ListThreadsResponse {
     pub threads: Vec<Thread>,
     pub total: usize,
     pub page: usize,
-    pub per_page: usize,
+    pub per_page: PaginationSizeValue,
     pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum OrderDirection {
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ThreadOrderField {
+    #[serde(rename = "createdAt")]
+    CreatedAt,
+    #[serde(rename = "updatedAt")]
+    UpdatedAt,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ThreadOrderBy {
+    pub field: ThreadOrderField,
+    pub direction: OrderDirection,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MessageOrderField {
+    #[serde(rename = "createdAt")]
+    CreatedAt,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MessageOrderBy {
+    pub field: MessageOrderField,
+    pub direction: OrderDirection,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum PaginationSizeValue {
+    Number(usize),
+    All(bool),
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -109,12 +168,15 @@ pub struct ListThreadsQuery {
     pub page: Option<usize>,
     #[serde(default)]
     #[serde(rename = "perPage")]
-    pub per_page: Option<usize>,
+    pub per_page: Option<PaginationSizeValue>,
     #[serde(default)]
     #[serde(rename = "resourceId")]
     pub resource_id: Option<String>,
     #[serde(default)]
-    pub metadata: Option<String>,
+    pub metadata: Option<Value>,
+    #[serde(default)]
+    #[serde(rename = "orderBy")]
+    pub order_by: Option<ThreadOrderBy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -150,7 +212,7 @@ pub struct ListMemoryMessagesResponse {
     pub messages: Vec<MemoryMessage>,
     pub total: usize,
     pub page: usize,
-    pub per_page: usize,
+    pub per_page: PaginationSizeValue,
     pub has_more: bool,
 }
 
@@ -161,7 +223,7 @@ pub struct ListMessagesQuery {
     pub page: Option<usize>,
     #[serde(default)]
     #[serde(rename = "perPage")]
-    pub per_page: Option<usize>,
+    pub per_page: Option<PaginationSizeValue>,
     #[serde(default)]
     #[serde(rename = "resourceId")]
     pub resource_id: Option<String>,
@@ -174,6 +236,9 @@ pub struct ListMessagesQuery {
     #[serde(default)]
     #[serde(rename = "endDate")]
     pub end_date: Option<DateTime<Utc>>,
+    #[serde(default)]
+    #[serde(rename = "orderBy")]
+    pub order_by: Option<MessageOrderBy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::model::{
     AppendMessageRequest, CloneThreadRequest, CreateThreadRequest, DeleteMessagesRequest,
     HistoryQuery, ListMessagesQuery, ListThreadsQuery, Message, MessagePage, Pagination, Thread,
-    ThreadPage,
+    ThreadPage, UpdateThreadRequest,
 };
 
 pub type MemoryStoreResult<T> = Result<T, MemoryStoreError>;
@@ -25,6 +25,8 @@ pub trait MemoryStore: Send + Sync {
     async fn create_thread(&self, input: CreateThreadRequest) -> MemoryStoreResult<Thread>;
 
     async fn get_thread(&self, thread_id: Uuid) -> MemoryStoreResult<Option<Thread>>;
+
+    async fn update_thread(&self, input: UpdateThreadRequest) -> MemoryStoreResult<Thread>;
 
     async fn list_threads(&self, query: ListThreadsQuery) -> MemoryStoreResult<ThreadPage>;
 

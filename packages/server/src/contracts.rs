@@ -222,6 +222,9 @@ impl GenerateStreamEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateWorkflowRunRequest {
     #[serde(default)]
+    #[serde(alias = "runId")]
+    pub run_id: Option<String>,
+    #[serde(default)]
     #[serde(alias = "resourceId")]
     pub resource_id: Option<String>,
     #[serde(default)]
@@ -360,6 +363,11 @@ pub struct StartWorkflowRunResponse {
     pub run: WorkflowRunRecord,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeleteWorkflowRunResponse {
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ListWorkflowRunsResponse {
     pub runs: Vec<WorkflowRunRecord>,
@@ -399,6 +407,17 @@ pub struct CreateMemoryThreadResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GetMemoryThreadResponse {
     pub thread: Thread,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UpdateMemoryThreadRequest {
+    #[serde(default)]
+    #[serde(alias = "resourceId")]
+    pub resource_id: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -485,7 +504,7 @@ pub struct ListThreadsResponse {
     pub threads: Vec<Thread>,
     pub total: usize,
     pub page: usize,
-    pub per_page: usize,
+    pub per_page: PaginationSizeValue,
     pub has_more: bool,
 }
 
@@ -574,8 +593,48 @@ pub struct ListMemoryMessagesResponse {
     pub messages: Vec<MemoryMessage>,
     pub total: usize,
     pub page: usize,
-    pub per_page: usize,
+    pub per_page: PaginationSizeValue,
     pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum OrderDirection {
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ThreadOrderField {
+    #[serde(rename = "createdAt")]
+    CreatedAt,
+    #[serde(rename = "updatedAt")]
+    UpdatedAt,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ThreadOrderBy {
+    pub field: ThreadOrderField,
+    pub direction: OrderDirection,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MessageOrderField {
+    #[serde(rename = "createdAt")]
+    CreatedAt,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MessageOrderBy {
+    pub field: MessageOrderField,
+    pub direction: OrderDirection,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum PaginationSizeValue {
+    Number(usize),
+    All(bool),
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -585,12 +644,15 @@ pub struct ListThreadsQuery {
     pub page: Option<usize>,
     #[serde(default)]
     #[serde(rename = "perPage", alias = "per_page")]
-    pub per_page: Option<usize>,
+    pub per_page: Option<String>,
     #[serde(default)]
     #[serde(rename = "resourceId", alias = "resource_id")]
     pub resource_id: Option<String>,
     #[serde(default)]
     pub metadata: Option<String>,
+    #[serde(default)]
+    #[serde(rename = "orderBy", alias = "order_by")]
+    pub order_by: Option<String>,
 }
 
 impl ListThreadsQuery {
@@ -599,6 +661,28 @@ impl ListThreadsQuery {
             .as_ref()
             .map(|raw| serde_json::from_str(raw).map_err(|error| error.to_string()))
             .transpose()
+    }
+
+    pub fn parsed_order_by(&self) -> Result<Option<ThreadOrderBy>, String> {
+        self.order_by
+            .as_ref()
+            .map(|raw| serde_json::from_str(raw).map_err(|error| error.to_string()))
+            .transpose()
+    }
+
+    pub fn parsed_per_page(&self) -> Result<Option<usize>, String> {
+        self.per_page
+            .as_deref()
+            .map(parse_per_page)
+            .transpose()
+            .map(Option::flatten)
+    }
+
+    pub fn response_per_page(&self, effective: usize) -> PaginationSizeValue {
+        match self.per_page.as_deref() {
+            Some("false") => PaginationSizeValue::All(false),
+            _ => PaginationSizeValue::Number(effective),
+        }
     }
 }
 
@@ -609,7 +693,7 @@ pub struct ListMessagesQuery {
     pub page: Option<usize>,
     #[serde(default)]
     #[serde(rename = "perPage", alias = "per_page")]
-    pub per_page: Option<usize>,
+    pub per_page: Option<String>,
     #[serde(default)]
     #[serde(rename = "resourceId", alias = "resource_id")]
     pub resource_id: Option<String>,
@@ -622,6 +706,48 @@ pub struct ListMessagesQuery {
     #[serde(default)]
     #[serde(rename = "endDate", alias = "end_date")]
     pub end_date: Option<DateTime<Utc>>,
+    #[serde(default)]
+    #[serde(rename = "orderBy", alias = "order_by")]
+    pub order_by: Option<String>,
+}
+
+impl ListMessagesQuery {
+    pub fn parsed_order_by(&self) -> Result<Option<MessageOrderBy>, String> {
+        self.order_by
+            .as_ref()
+            .map(|raw| serde_json::from_str(raw).map_err(|error| error.to_string()))
+            .transpose()
+    }
+
+    pub fn parsed_per_page(&self) -> Result<Option<usize>, String> {
+        self.per_page
+            .as_deref()
+            .map(parse_per_page)
+            .transpose()
+            .map(Option::flatten)
+    }
+
+    pub fn response_per_page(&self, effective: usize) -> PaginationSizeValue {
+        match self.per_page.as_deref() {
+            Some("false") => PaginationSizeValue::All(false),
+            _ => PaginationSizeValue::Number(effective),
+        }
+    }
+}
+
+fn parse_per_page(raw: &str) -> Result<Option<usize>, String> {
+    if raw == "false" {
+        return Ok(None);
+    }
+
+    let parsed = raw
+        .parse::<usize>()
+        .map_err(|error| format!("invalid perPage '{raw}': {error}"))?;
+    if parsed == 0 {
+        return Err("perPage must be greater than zero".to_owned());
+    }
+
+    Ok(Some(parsed))
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
