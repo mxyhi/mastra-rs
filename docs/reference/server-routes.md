@@ -80,10 +80,20 @@ Current public route surface implemented by `mastra-server`.
 
 - `resume` / `resume-async` / `resume-stream` accept `runId`, optional `step`,
   optional `resumeData`, and optional `requestContext`.
+- `step` is currently accepted only for wire compatibility; the Rust runtime
+  does not consume it when rebuilding the run.
 - The current Rust runtime does not implement upstream suspend/resume
   checkpoints yet; it restarts the stored run using `resumeData` as the next
   `inputData` payload when supplied, otherwise it reuses the persisted
   `input_data`.
+
+### Cancel Notes
+
+- `POST .../runs/{run_id}/cancel` currently updates the persisted run record to
+  `Cancelled`.
+- It does not abort an already running async workflow task; this is still a
+  status-level compatibility route rather than a full upstream interruption
+  mechanism.
 
 ## Misc
 
@@ -96,11 +106,15 @@ Current public route surface implemented by `mastra-server`.
 
 These upstream route families are still structural gaps in the Rust port:
 
+- workflow lifecycle routes such as `start`, `observe`, `restart`,
+  `restart-all-active`, and `time-travel-stream`
 - workflow time-travel
 - semantic recall / vector-backed memory
 - automatic working-memory / observational-memory processors
 - vectors
 - logs
 - telemetry
+- voice
+- networks / A2A
 - stored MCP clients
 - tool providers

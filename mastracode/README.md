@@ -20,6 +20,7 @@ printf 'summarize this repo' | cargo run -p mastracode -- run --prompt - --timeo
 - `--continue` / `-c` to resume the latest thread
 - `--format default|json`
 - `--timeout` with exit code `2` on timeout
+- a single local storage file, not the upstream project-scoped thread/config layout
 
 ## Runtime Notes
 
@@ -37,4 +38,5 @@ Compared with upstream Mastra Code today:
 - upstream headless mode uses `--continue`, not `--continue-latest`
 - upstream TUI/headless stack supports model packs, custom OpenAI-compatible providers, OAuth, and API-key-based model routing
 - this Rust port does not yet consume `.mastracode` config files or provider API keys for model resolution
+- this Rust port does not yet implement the upstream project-scoped thread registry or app-data auth/settings/plans/config files
 - `run` still executes through a fixed `StaticModel::echo()` backend

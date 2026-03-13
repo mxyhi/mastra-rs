@@ -1,6 +1,7 @@
 # mastra-server
 
-Axum-based HTTP surface for the current Rust Mastra runtime.
+Axum-based HTTP surface for the current Rust Mastra runtime, not the upstream
+framework-agnostic Mastra server handler package.
 
 ## Route Groups
 
@@ -52,11 +53,15 @@ This is still a simplified Rust port: the CLI path now loads project graphs end 
 
 This crate does not yet provide the larger upstream control plane:
 
+- workflow lifecycle routes such as `start`, `observe`, `restart`,
+  `restart-all-active`, and `time-travel-stream`
 - workflow time-travel
 - semantic recall
 - vector routes
 - logs routes
 - telemetry routes
+- voice routes
+- network / A2A routes
 - stored MCP client management
 
 ## Newly Aligned Workflow Control Routes
@@ -71,6 +76,13 @@ The Rust server now exposes the main upstream workflow lifecycle routes:
 Current resume semantics are intentionally simple: the server restarts the
 stored run with `resumeData` as the new `inputData` payload when provided,
 otherwise it reuses the last persisted `input_data`.
+
+The request contract still accepts an optional `step` field for wire
+compatibility, but the current Rust runtime ignores it during resume.
+
+Current cancel semantics are also intentionally narrow: the cancel route marks
+the stored run record as `Cancelled`, but it does not abort an already running
+workflow task.
 
 ## Working Memory And Observations
 

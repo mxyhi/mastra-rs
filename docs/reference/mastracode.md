@@ -29,6 +29,8 @@ interactive TUI and also supports top-level headless entry via
 - latest-thread reuse via `--continue`
 - `--continue-latest` remains accepted as a compatibility alias
 - timeout exits with code `2`
+- storage is a single local libsql file for this Rust port, not the upstream
+  project-scoped thread + auth/settings/plans/config directory model
 
 ## Boundary
 
@@ -38,6 +40,7 @@ Today it still runs a fixed echo model through `StaticModel::echo()` and does no
 
 - provider or gateway selection
 - `.mastracode` project/global settings
+- project-scoped thread registries and app-data config files
 - interactive TUI flows
 - slash commands
 - OAuth or editor integrations
