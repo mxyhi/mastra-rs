@@ -3,15 +3,16 @@ use std::sync::Arc;
 use chrono::Utc;
 use mastra_core::{
     CreateThreadRequest as CoreCreateThreadRequest, MemoryConfig, MemoryEngine, MemoryMessage,
-    MemoryRole, UpdateThreadRequest as CoreUpdateThreadRequest,
+    MemoryRole, MemoryScope, UpdateThreadRequest as CoreUpdateThreadRequest, WorkingMemoryFormat,
 };
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    AppendMessageRequest, CloneThreadRequest, CreateThreadRequest, DeleteMessagesRequest,
-    HistoryQuery, InMemoryMemoryStore, ListMessagesQuery, ListThreadsQuery, Memory, MemoryStore,
-    MessageRole, Pagination,
+    AppendMessageRequest, AppendObservationRequest, CloneThreadRequest, CreateThreadRequest,
+    DeleteMessagesRequest, HistoryQuery, InMemoryMemoryStore, ListMessagesQuery,
+    ListObservationsQuery, ListThreadsQuery, Memory, MemoryStore, MessageRole, Pagination,
+    UpdateWorkingMemoryRequest,
 };
 
 #[tokio::test]
@@ -495,4 +496,148 @@ async fn delete_thread_removes_thread_and_history() {
 
     assert!(thread.is_none());
     assert_eq!(threads.total, 0);
+}
+
+#[tokio::test]
+async fn resource_scoped_working_memory_is_shared_with_new_threads() {
+    let memory = Memory::in_memory();
+    let first_thread = memory
+        .create_thread(CreateThreadRequest::new("resource-working-memory", "First"))
+        .await
+        .expect("first thread should be created");
+
+    let working_memory = memory
+        .update_working_memory(UpdateWorkingMemoryRequest {
+            thread_id: first_thread.id,
+            resource_id: Some("resource-working-memory".to_owned()),
+            scope: MemoryScope::Resource,
+            format: WorkingMemoryFormat::Json,
+            template: Some("# User Profile".to_owned()),
+            content: json!({
+                "name": "Sam",
+                "timezone": "CET"
+            }),
+        })
+        .await
+        .expect("working memory should be updated");
+
+    let second_thread = memory
+        .create_thread(CreateThreadRequest::new(
+            "resource-working-memory",
+            "Second",
+        ))
+        .await
+        .expect("second thread should be created");
+    let second_working_memory = memory
+        .working_memory(second_thread.id)
+        .await
+        .expect("working memory should load")
+        .expect("working memory should exist");
+
+    assert_eq!(working_memory.scope, MemoryScope::Resource);
+    assert_eq!(
+        working_memory.content,
+        json!({ "name": "Sam", "timezone": "CET" })
+    );
+    assert_eq!(second_working_memory.scope, MemoryScope::Resource);
+    assert_eq!(
+        second_working_memory.content,
+        json!({ "name": "Sam", "timezone": "CET" })
+    );
+    assert_eq!(
+        second_working_memory.template.as_deref(),
+        Some("# User Profile")
+    );
+}
+
+#[tokio::test]
+async fn clone_thread_copies_working_memory_and_remaps_observation_message_ids() {
+    let memory = Memory::in_memory();
+    let thread = memory
+        .create_thread(CreateThreadRequest::new(
+            "resource-observation",
+            "Observation Source",
+        ))
+        .await
+        .expect("thread should be created");
+
+    let first_message = memory
+        .append_message(AppendMessageRequest::new(
+            thread.id,
+            MessageRole::User,
+            "first message",
+        ))
+        .await
+        .expect("first message should be appended");
+    let second_message = memory
+        .append_message(AppendMessageRequest::new(
+            thread.id,
+            MessageRole::Assistant,
+            "second message",
+        ))
+        .await
+        .expect("second message should be appended");
+
+    memory
+        .update_working_memory(UpdateWorkingMemoryRequest {
+            thread_id: thread.id,
+            resource_id: Some("resource-observation".to_owned()),
+            scope: MemoryScope::Thread,
+            format: WorkingMemoryFormat::Markdown,
+            template: None,
+            content: json!("Remember this thread"),
+        })
+        .await
+        .expect("working memory should be updated");
+
+    let observation = memory
+        .append_observation(AppendObservationRequest {
+            thread_id: thread.id,
+            resource_id: Some("resource-observation".to_owned()),
+            scope: MemoryScope::Thread,
+            content: "Observed both messages".to_owned(),
+            observed_message_ids: vec![first_message.id, second_message.id],
+            metadata: json!({ "kind": "summary" }),
+        })
+        .await
+        .expect("observation should be appended");
+
+    let cloned = memory
+        .clone_thread(CloneThreadRequest::new(thread.id).with_title("Observation Clone"))
+        .await
+        .expect("thread should be cloned");
+    let cloned_working_memory = memory
+        .working_memory(cloned.id)
+        .await
+        .expect("working memory should load")
+        .expect("working memory should exist");
+    let cloned_messages = memory
+        .list_messages_page(ListMessagesQuery {
+            thread_id: cloned.id,
+            pagination: Pagination::new(0, 10),
+        })
+        .await
+        .expect("cloned messages should list");
+    let cloned_observations = memory
+        .observations(ListObservationsQuery::new(cloned.id))
+        .await
+        .expect("cloned observations should list");
+
+    assert_eq!(cloned_working_memory.content, json!("Remember this thread"));
+    assert_eq!(cloned_messages.total, 2);
+    assert_eq!(cloned_observations.len(), 1);
+    assert_ne!(cloned_observations[0].id, observation.id);
+    assert_eq!(cloned_observations[0].content, "Observed both messages");
+    assert_eq!(cloned_observations[0].observed_message_ids.len(), 2);
+    assert!(
+        cloned_observations[0]
+            .observed_message_ids
+            .iter()
+            .all(|message_id| *message_id != first_message.id && *message_id != second_message.id)
+    );
+    assert!(cloned_messages.items.iter().all(|message| {
+        cloned_observations[0]
+            .observed_message_ids
+            .contains(&message.id)
+    }));
 }

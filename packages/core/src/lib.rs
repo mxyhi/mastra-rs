@@ -15,10 +15,12 @@ pub use agent::{
 pub use error::{MastraError, MastraErrorCode, Result};
 pub use mastra::{Mastra, MastraBuilder};
 pub use memory::{
-    CloneThreadRequest, CreateThreadRequest, MemoryConfig, MemoryEngine, MemoryMessage,
-    MemoryMessageOrder, MemoryMessageOrderField, MemoryMessagePage, MemoryOrderDirection,
-    MemoryRecallRequest, MemoryRole, MemoryThreadOrder, MemoryThreadOrderField, MemoryThreadPage,
-    MemoryThreadQuery, Thread, UpdateThreadRequest,
+    AppendObservationRequest, CloneThreadRequest, CreateThreadRequest, MemoryConfig, MemoryEngine,
+    MemoryMessage, MemoryMessageOrder, MemoryMessageOrderField, MemoryMessagePage,
+    MemoryOrderDirection, MemoryRecallRequest, MemoryRole, MemoryScope, MemoryThreadOrder,
+    MemoryThreadOrderField, MemoryThreadPage, MemoryThreadQuery, ObservationPage, ObservationQuery,
+    ObservationRecord, ObservationalMemoryConfig, Thread, UpdateThreadRequest,
+    UpdateWorkingMemoryRequest, WorkingMemoryConfig, WorkingMemoryFormat, WorkingMemoryState,
 };
 pub use model::{
     FinishReason, LanguageModel, ModelEvent, ModelRequest, ModelResponse, ModelToolCall,

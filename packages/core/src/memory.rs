@@ -141,6 +141,164 @@ pub struct MemoryMessagePage {
     pub has_more: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryScope {
+    #[default]
+    Thread,
+    Resource,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkingMemoryFormat {
+    #[default]
+    Markdown,
+    Json,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct WorkingMemoryConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub scope: MemoryScope,
+    #[serde(default)]
+    pub format: WorkingMemoryFormat,
+    #[serde(default)]
+    pub template: Option<String>,
+}
+
+impl Default for WorkingMemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            scope: MemoryScope::Thread,
+            format: WorkingMemoryFormat::Markdown,
+            template: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct ObservationalMemoryConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub scope: MemoryScope,
+}
+
+impl Default for ObservationalMemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            scope: MemoryScope::Thread,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct WorkingMemoryState {
+    pub thread_id: String,
+    pub resource_id: Option<String>,
+    pub scope: MemoryScope,
+    pub format: WorkingMemoryFormat,
+    pub template: Option<String>,
+    pub content: Value,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl WorkingMemoryState {
+    pub fn render_content(&self) -> String {
+        match self.format {
+            WorkingMemoryFormat::Markdown => self
+                .content
+                .as_str()
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| self.content.to_string()),
+            WorkingMemoryFormat::Json => serde_json::to_string_pretty(&self.content)
+                .unwrap_or_else(|_| self.content.to_string()),
+        }
+    }
+
+    pub fn system_message(&self) -> String {
+        let mut sections = vec!["Working memory:".to_owned()];
+        if let Some(template) = self
+            .template
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            sections.push(format!("Template:\n{}", template.trim()));
+        }
+        sections.push(format!("Data:\n{}", self.render_content()));
+        sections.join("\n\n")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct UpdateWorkingMemoryRequest {
+    pub thread_id: String,
+    pub resource_id: Option<String>,
+    #[serde(default)]
+    pub scope: MemoryScope,
+    #[serde(default)]
+    pub format: WorkingMemoryFormat,
+    pub template: Option<String>,
+    pub content: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct ObservationRecord {
+    pub id: String,
+    pub thread_id: String,
+    pub resource_id: Option<String>,
+    pub scope: MemoryScope,
+    pub content: String,
+    #[serde(default)]
+    pub observed_message_ids: Vec<String>,
+    #[serde(default)]
+    pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl ObservationRecord {
+    pub fn render_context_line(&self) -> String {
+        format!("Observation: {}", self.content)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct AppendObservationRequest {
+    pub thread_id: String,
+    pub resource_id: Option<String>,
+    #[serde(default)]
+    pub scope: MemoryScope,
+    pub content: String,
+    #[serde(default)]
+    pub observed_message_ids: Vec<String>,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct ObservationQuery {
+    pub thread_id: String,
+    pub resource_id: Option<String>,
+    pub scope: Option<MemoryScope>,
+    pub page: Option<usize>,
+    pub per_page: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct ObservationPage {
+    pub observations: Vec<ObservationRecord>,
+    pub total: usize,
+    pub page: usize,
+    pub per_page: usize,
+    pub has_more: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CloneThreadRequest {
     pub source_thread_id: String,
@@ -158,6 +316,10 @@ pub struct CloneThreadRequest {
 pub struct MemoryConfig {
     pub last_messages: Option<usize>,
     pub read_only: bool,
+    #[serde(default)]
+    pub working_memory: WorkingMemoryConfig,
+    #[serde(default)]
+    pub observational_memory: ObservationalMemoryConfig,
 }
 
 impl Default for MemoryConfig {
@@ -165,6 +327,8 @@ impl Default for MemoryConfig {
         Self {
             last_messages: Some(20),
             read_only: false,
+            working_memory: WorkingMemoryConfig::default(),
+            observational_memory: ObservationalMemoryConfig::default(),
         }
     }
 }
@@ -224,6 +388,42 @@ pub trait MemoryEngine: Send + Sync {
         let mut messages = messages;
         sort_messages(&mut messages, request.order_by.unwrap_or_default());
         paginate_messages(messages, request.page, request.per_page)
+    }
+
+    async fn get_working_memory(
+        &self,
+        _thread_id: &str,
+        _resource_id: Option<&str>,
+    ) -> Result<Option<WorkingMemoryState>> {
+        Ok(None)
+    }
+
+    async fn update_working_memory(
+        &self,
+        _request: UpdateWorkingMemoryRequest,
+    ) -> Result<WorkingMemoryState> {
+        Err(MastraError::storage(
+            "memory engine does not support working memory updates",
+        ))
+    }
+
+    async fn list_observations(&self, request: ObservationQuery) -> Result<ObservationPage> {
+        Ok(ObservationPage {
+            observations: Vec::new(),
+            total: 0,
+            page: request.page.unwrap_or(0),
+            per_page: request.per_page.unwrap_or(0),
+            has_more: false,
+        })
+    }
+
+    async fn append_observation(
+        &self,
+        _request: AppendObservationRequest,
+    ) -> Result<ObservationRecord> {
+        Err(MastraError::storage(
+            "memory engine does not support observational memory writes",
+        ))
     }
 
     async fn clone_thread(&self, _request: CloneThreadRequest) -> Result<Thread> {

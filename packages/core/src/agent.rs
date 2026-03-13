@@ -11,7 +11,7 @@ use crate::{
     error::{MastraError, Result},
     memory::{
         CreateThreadRequest, MemoryConfig, MemoryEngine, MemoryMessage, MemoryRecallRequest,
-        MemoryRole,
+        MemoryRole, ObservationQuery,
     },
     model::{
         FinishReason, LanguageModel, ModelEvent, ModelRequest, ModelResponse, ModelToolCall,
@@ -543,6 +543,7 @@ impl Agent {
         let Some(memory) = &self.memory else {
             return Ok((thread_id, Vec::new()));
         };
+        let resource_id_for_lookup = resource_id.clone();
 
         let thread_id = match thread_id {
             Some(thread_id) => thread_id,
@@ -577,9 +578,39 @@ impl Agent {
             .await?
             .into_iter()
             .map(|message| format!("{:?}: {}", message.role, message.content))
-            .collect();
+            .collect::<Vec<_>>();
 
-        Ok((Some(thread_id), history))
+        let mut memory_context = Vec::new();
+        if self.memory_config.working_memory.enabled {
+            if let Some(working_memory) = memory
+                .get_working_memory(&thread_id, resource_id_for_lookup.as_deref())
+                .await?
+            {
+                memory_context.push(working_memory.system_message());
+            }
+        }
+
+        if self.memory_config.observational_memory.enabled {
+            let observations = memory
+                .list_observations(ObservationQuery {
+                    thread_id: thread_id.clone(),
+                    resource_id: resource_id_for_lookup,
+                    scope: Some(self.memory_config.observational_memory.scope),
+                    page: None,
+                    per_page: None,
+                })
+                .await?;
+            memory_context.extend(
+                observations
+                    .observations
+                    .into_iter()
+                    .map(|observation| observation.render_context_line()),
+            );
+        }
+
+        memory_context.extend(history);
+
+        Ok((Some(thread_id), memory_context))
     }
 
     async fn execute_tool_calls(
@@ -831,11 +862,13 @@ mod tests {
     use crate::{
         memory::{
             CreateThreadRequest, MemoryConfig, MemoryEngine, MemoryMessage, MemoryRecallRequest,
-            MemoryRole, Thread,
+            MemoryRole, MemoryScope, ObservationPage, ObservationQuery, ObservationRecord,
+            ObservationalMemoryConfig, Thread, WorkingMemoryConfig, WorkingMemoryFormat,
+            WorkingMemoryState,
         },
         model::{
-            FinishReason, ModelEvent, ModelResponse, ModelToolCall, ModelToolResult, StaticModel,
-            UsageStats,
+            FinishReason, ModelEvent, ModelRequest, ModelResponse, ModelToolCall, ModelToolResult,
+            StaticModel, UsageStats,
         },
         request_context::RequestContext,
         tool::Tool,
@@ -847,6 +880,8 @@ mod tests {
     struct RecordingMemory {
         threads: RwLock<HashMap<String, Thread>>,
         messages: RwLock<HashMap<String, Vec<MemoryMessage>>>,
+        working_memory: RwLock<HashMap<String, WorkingMemoryState>>,
+        observations: RwLock<HashMap<String, Vec<ObservationRecord>>>,
     }
 
     #[async_trait]
@@ -901,6 +936,35 @@ mod tests {
                 .get(&request.thread_id)
                 .cloned()
                 .unwrap_or_default())
+        }
+
+        async fn get_working_memory(
+            &self,
+            thread_id: &str,
+            _resource_id: Option<&str>,
+        ) -> crate::Result<Option<WorkingMemoryState>> {
+            Ok(self.working_memory.read().get(thread_id).cloned())
+        }
+
+        async fn list_observations(
+            &self,
+            request: ObservationQuery,
+        ) -> crate::Result<ObservationPage> {
+            let observations = self
+                .observations
+                .read()
+                .get(&request.thread_id)
+                .cloned()
+                .unwrap_or_default();
+            Ok(ObservationPage {
+                total: observations.len(),
+                page: request.page.unwrap_or(0),
+                per_page: request
+                    .per_page
+                    .unwrap_or_else(|| observations.len().max(1)),
+                has_more: false,
+                observations,
+            })
         }
     }
 
@@ -1091,6 +1155,132 @@ mod tests {
         assert!(model_requests[0].tool_results.is_empty());
         assert_eq!(model_requests[0].run_id.as_deref(), Some("run-123"));
         assert_eq!(model_requests[0].thread_id.as_deref(), Some("thread-123"));
+    }
+
+    #[tokio::test]
+    async fn generate_includes_working_memory_and_observations_when_enabled() {
+        let memory = Arc::new(RecordingMemory::default());
+        let thread = memory
+            .create_thread(CreateThreadRequest {
+                id: Some("thread-memory".into()),
+                resource_id: Some("resource-memory".into()),
+                title: Some("Memory thread".into()),
+                metadata: Value::Null,
+            })
+            .await
+            .expect("thread should be created");
+        memory
+            .append_messages(
+                &thread.id,
+                vec![MemoryMessage {
+                    id: uuid::Uuid::now_v7().to_string(),
+                    thread_id: thread.id.clone(),
+                    role: MemoryRole::User,
+                    content: "prior context".into(),
+                    created_at: Utc::now(),
+                    metadata: Value::Null,
+                }],
+            )
+            .await
+            .expect("history should be appended");
+        memory.working_memory.write().insert(
+            thread.id.clone(),
+            WorkingMemoryState {
+                thread_id: thread.id.clone(),
+                resource_id: Some("resource-memory".into()),
+                scope: MemoryScope::Thread,
+                format: WorkingMemoryFormat::Markdown,
+                template: Some("# User Profile".into()),
+                content: json!("Name: Sam"),
+                updated_at: Utc::now(),
+            },
+        );
+        memory.observations.write().insert(
+            thread.id.clone(),
+            vec![ObservationRecord {
+                id: uuid::Uuid::now_v7().to_string(),
+                thread_id: thread.id.clone(),
+                resource_id: Some("resource-memory".into()),
+                scope: MemoryScope::Thread,
+                content: "User likes Rust.".into(),
+                observed_message_ids: Vec::new(),
+                metadata: Value::Null,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            }],
+        );
+
+        let model_requests = Arc::new(RwLock::new(Vec::<ModelRequest>::new()));
+        let recording_requests = Arc::clone(&model_requests);
+        let model = StaticModel::new(move |request| {
+            let recording_requests = Arc::clone(&recording_requests);
+            async move {
+                recording_requests.write().push(request);
+                Ok(ModelResponse {
+                    text: "done".into(),
+                    data: Value::Null,
+                    finish_reason: FinishReason::Stop,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                })
+            }
+        });
+
+        let agent = Agent::new(AgentConfig {
+            id: "memory-agent".into(),
+            name: "Memory Agent".into(),
+            instructions: "Use memory".into(),
+            description: None,
+            model: Arc::new(model),
+            tools: Vec::new(),
+            memory: Some(memory),
+            memory_config: MemoryConfig {
+                last_messages: Some(10),
+                read_only: false,
+                working_memory: WorkingMemoryConfig {
+                    enabled: true,
+                    scope: MemoryScope::Thread,
+                    format: WorkingMemoryFormat::Markdown,
+                    template: Some("# User Profile".into()),
+                },
+                observational_memory: ObservationalMemoryConfig {
+                    enabled: true,
+                    scope: MemoryScope::Thread,
+                },
+            },
+        });
+
+        agent
+            .generate(AgentGenerateRequest {
+                prompt: "current prompt".into(),
+                thread_id: Some("thread-memory".into()),
+                resource_id: Some("resource-memory".into()),
+                request_context: RequestContext::new(),
+                ..Default::default()
+            })
+            .await
+            .expect("agent should generate");
+
+        let recorded = model_requests.read();
+        assert_eq!(recorded.len(), 1);
+        assert!(
+            recorded[0]
+                .memory
+                .iter()
+                .any(|entry| entry.contains("Working memory:"))
+        );
+        assert!(
+            recorded[0]
+                .memory
+                .iter()
+                .any(|entry| entry.contains("Observation: User likes Rust."))
+        );
+        assert!(
+            recorded[0]
+                .memory
+                .iter()
+                .any(|entry| entry.contains("User: prior context"))
+        );
     }
 
     #[test]

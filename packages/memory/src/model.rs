@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use mastra_core::{MemoryScope, WorkingMemoryFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -201,6 +202,78 @@ pub struct ListMessagesQuery {
 pub struct HistoryQuery {
     pub thread_id: Uuid,
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UpdateWorkingMemoryRequest {
+    pub thread_id: Uuid,
+    pub resource_id: Option<String>,
+    pub scope: MemoryScope,
+    pub format: WorkingMemoryFormat,
+    pub template: Option<String>,
+    pub content: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkingMemory {
+    pub thread_id: Uuid,
+    pub resource_id: Option<String>,
+    pub scope: MemoryScope,
+    pub format: WorkingMemoryFormat,
+    pub template: Option<String>,
+    pub content: Value,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AppendObservationRequest {
+    pub thread_id: Uuid,
+    pub resource_id: Option<String>,
+    pub scope: MemoryScope,
+    pub content: String,
+    pub observed_message_ids: Vec<Uuid>,
+    pub metadata: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListObservationsQuery {
+    pub thread_id: Uuid,
+    pub resource_id: Option<String>,
+    pub page: Option<usize>,
+    pub per_page: Option<usize>,
+}
+
+impl ListObservationsQuery {
+    pub fn new(thread_id: Uuid) -> Self {
+        Self {
+            thread_id,
+            resource_id: None,
+            page: None,
+            per_page: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Observation {
+    pub id: Uuid,
+    pub thread_id: Uuid,
+    pub resource_id: Option<String>,
+    pub scope: MemoryScope,
+    pub content: String,
+    pub observed_message_ids: Vec<Uuid>,
+    pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ObservationPage {
+    pub observations: Vec<Observation>,
+    pub total: usize,
+    pub page: usize,
+    pub per_page: usize,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

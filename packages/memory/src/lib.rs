@@ -2,24 +2,37 @@ mod in_memory;
 mod model;
 mod store;
 
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use mastra_core::{
+    AppendObservationRequest as CoreAppendObservationRequest,
     CloneThreadRequest as CoreCloneThreadRequest, CreateThreadRequest as CoreCreateThreadRequest,
     MastraError, MemoryEngine, MemoryMessage, MemoryRecallRequest, MemoryRole,
-    Thread as CoreThread,
+    ObservationPage as CoreObservationPage, ObservationQuery as CoreObservationQuery,
+    ObservationRecord as CoreObservationRecord, Thread as CoreThread,
+    UpdateWorkingMemoryRequest as CoreUpdateWorkingMemoryRequest,
+    WorkingMemoryState as CoreWorkingMemoryState,
 };
+use serde_json::{Map, Value};
 use uuid::Uuid;
 
 pub use in_memory::InMemoryMemoryStore;
+pub use mastra_core::{MemoryScope, WorkingMemoryFormat};
 pub use model::{
-    AppendMessageRequest, CloneThreadRequest, CreateThreadRequest, DeleteMessagesRequest,
-    HistoryQuery, ListMessagesQuery, ListThreadsQuery, Message, MessagePage, MessageRole,
-    Pagination, Thread, ThreadPage, UpdateThreadRequest,
+    AppendMessageRequest, AppendObservationRequest, CloneThreadRequest, CreateThreadRequest,
+    DeleteMessagesRequest, HistoryQuery, ListMessagesQuery, ListObservationsQuery,
+    ListThreadsQuery, Message, MessagePage, MessageRole, Observation, ObservationPage,
+    Pagination, Thread, ThreadPage, UpdateThreadRequest, UpdateWorkingMemoryRequest, WorkingMemory,
 };
 pub use store::{MemoryStore, MemoryStoreError, MemoryStoreResult, ensure_valid_pagination};
+
+const WORKING_MEMORY_METADATA_KEY: &str = "workingMemory";
+const OBSERVATIONS_METADATA_KEY: &str = "observationalMemory";
 
 #[derive(Clone)]
 pub struct Memory {
@@ -45,7 +58,23 @@ impl Memory {
     }
 
     pub async fn create_thread(&self, input: CreateThreadRequest) -> MemoryStoreResult<Thread> {
-        self.store.create_thread(input).await
+        let thread = self.store.create_thread(input).await?;
+        if working_memory_from_thread(&thread).is_none() {
+            if let Some(working_memory) = self
+                .resource_scoped_working_memory(&thread.resource_id)
+                .await?
+            {
+                self.persist_working_memory_on_thread(thread.id, &working_memory)
+                    .await?;
+                return self
+                    .store
+                    .get_thread(thread.id)
+                    .await?
+                    .ok_or(MemoryStoreError::ThreadNotFound(thread.id));
+            }
+        }
+
+        Ok(thread)
     }
 
     pub async fn get_thread(&self, thread_id: Uuid) -> MemoryStoreResult<Option<Thread>> {
@@ -76,7 +105,69 @@ impl Memory {
     }
 
     pub async fn clone_thread(&self, input: CloneThreadRequest) -> MemoryStoreResult<Thread> {
-        self.store.clone_thread(input).await
+        let source_thread = self
+            .store
+            .get_thread(input.source_thread_id)
+            .await?
+            .ok_or(MemoryStoreError::ThreadNotFound(input.source_thread_id))?;
+        let source_messages = self
+            .store
+            .list_messages(ListMessagesQuery {
+                thread_id: input.source_thread_id,
+                pagination: unbounded_pagination(),
+            })
+            .await?
+            .items;
+        let filtered_source_messages = filter_cloned_messages_facade(source_messages, &input);
+        let cloned_thread = self.store.clone_thread(input).await?;
+
+        if let Some(working_memory) = working_memory_from_thread(&source_thread) {
+            self.persist_working_memory_on_thread(cloned_thread.id, &working_memory)
+                .await?;
+        }
+
+        let source_observations = observations_from_thread(&source_thread);
+        if !source_observations.is_empty() {
+            let cloned_messages = self
+                .store
+                .list_messages(ListMessagesQuery {
+                    thread_id: cloned_thread.id,
+                    pagination: unbounded_pagination(),
+                })
+                .await?
+                .items;
+            let message_id_map = filtered_source_messages
+                .iter()
+                .zip(cloned_messages.iter())
+                .map(|(source, cloned)| (source.id, cloned.id))
+                .collect::<HashMap<_, _>>();
+
+            let remapped_observations = source_observations
+                .into_iter()
+                .map(|observation| Observation {
+                    id: Uuid::new_v4(),
+                    thread_id: cloned_thread.id,
+                    resource_id: Some(cloned_thread.resource_id.clone()),
+                    scope: observation.scope,
+                    content: observation.content,
+                    observed_message_ids: observation
+                        .observed_message_ids
+                        .iter()
+                        .filter_map(|message_id| message_id_map.get(message_id).copied())
+                        .collect::<Vec<_>>(),
+                    metadata: observation.metadata,
+                    created_at: observation.created_at,
+                    updated_at: Utc::now(),
+                })
+                .collect::<Vec<_>>();
+            self.replace_observations_on_thread(cloned_thread.id, &remapped_observations)
+                .await?;
+        }
+
+        self.store
+            .get_thread(cloned_thread.id)
+            .await?
+            .ok_or(MemoryStoreError::ThreadNotFound(cloned_thread.id))
     }
 
     pub async fn delete_messages(&self, input: DeleteMessagesRequest) -> MemoryStoreResult<usize> {
@@ -85,6 +176,249 @@ impl Memory {
 
     pub async fn delete_thread(&self, thread_id: Uuid) -> MemoryStoreResult<()> {
         self.store.delete_thread(thread_id).await
+    }
+
+    pub async fn working_memory(
+        &self,
+        thread_id: Uuid,
+    ) -> MemoryStoreResult<Option<WorkingMemory>> {
+        let thread = self
+            .store
+            .get_thread(thread_id)
+            .await?
+            .ok_or(MemoryStoreError::ThreadNotFound(thread_id))?;
+
+        if let Some(working_memory) = working_memory_from_thread(&thread) {
+            return Ok(Some(working_memory));
+        }
+
+        self.resource_scoped_working_memory(&thread.resource_id)
+            .await
+            .map(|memory| {
+                memory.map(|mut memory| {
+                    memory.thread_id = thread_id;
+                    memory
+                })
+            })
+    }
+
+    pub async fn update_working_memory(
+        &self,
+        request: UpdateWorkingMemoryRequest,
+    ) -> MemoryStoreResult<WorkingMemory> {
+        let format = request.format;
+        self.update_working_memory_with_format(request, format)
+            .await
+    }
+
+    async fn update_working_memory_with_format(
+        &self,
+        request: UpdateWorkingMemoryRequest,
+        format: WorkingMemoryFormat,
+    ) -> MemoryStoreResult<WorkingMemory> {
+        let thread = self
+            .store
+            .get_thread(request.thread_id)
+            .await?
+            .ok_or(MemoryStoreError::ThreadNotFound(request.thread_id))?;
+        let resource_id = request
+            .resource_id
+            .unwrap_or_else(|| thread.resource_id.clone());
+        let working_memory = WorkingMemory {
+            thread_id: request.thread_id,
+            resource_id: Some(resource_id.clone()),
+            scope: request.scope,
+            format,
+            template: request.template,
+            content: request.content,
+            updated_at: Utc::now(),
+        };
+
+        match working_memory.scope {
+            MemoryScope::Thread => {
+                self.persist_working_memory_on_thread(request.thread_id, &working_memory)
+                    .await?;
+            }
+            MemoryScope::Resource => {
+                let threads = self
+                    .store
+                    .list_threads(ListThreadsQuery {
+                        resource_id: Some(resource_id.clone()),
+                        pagination: unbounded_pagination(),
+                    })
+                    .await?;
+                for thread in threads.items {
+                    self.persist_working_memory_on_thread(thread.id, &working_memory)
+                        .await?;
+                }
+            }
+        }
+
+        Ok(working_memory)
+    }
+
+    pub async fn observations(
+        &self,
+        query: ListObservationsQuery,
+    ) -> MemoryStoreResult<Vec<Observation>> {
+        let thread = self
+            .store
+            .get_thread(query.thread_id)
+            .await?
+            .ok_or(MemoryStoreError::ThreadNotFound(query.thread_id))?;
+        let mut observations = observations_from_thread(&thread);
+        if let Some(page) = query.page {
+            let per_page = query.per_page.unwrap_or_else(|| observations.len().max(1));
+            let start = page.saturating_mul(per_page);
+            observations = observations
+                .into_iter()
+                .skip(start)
+                .take(per_page)
+                .collect();
+        } else if let Some(per_page) = query.per_page {
+            observations = observations.into_iter().take(per_page).collect();
+        }
+        Ok(observations)
+    }
+
+    pub async fn append_observation(
+        &self,
+        request: AppendObservationRequest,
+    ) -> MemoryStoreResult<Observation> {
+        let thread = self
+            .store
+            .get_thread(request.thread_id)
+            .await?
+            .ok_or(MemoryStoreError::ThreadNotFound(request.thread_id))?;
+        let observation = Observation {
+            id: Uuid::new_v4(),
+            thread_id: request.thread_id,
+            resource_id: Some(
+                request
+                    .resource_id
+                    .unwrap_or_else(|| thread.resource_id.clone()),
+            ),
+            scope: request.scope,
+            content: request.content,
+            observed_message_ids: request.observed_message_ids,
+            metadata: request.metadata,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        match observation.scope {
+            MemoryScope::Thread => {
+                self.persist_observation_on_thread(request.thread_id, &observation)
+                    .await?;
+            }
+            MemoryScope::Resource => {
+                let threads = self
+                    .store
+                    .list_threads(ListThreadsQuery {
+                        resource_id: observation.resource_id.clone(),
+                        pagination: unbounded_pagination(),
+                    })
+                    .await?;
+                for thread in threads.items {
+                    self.persist_observation_on_thread(thread.id, &observation)
+                        .await?;
+                }
+            }
+        }
+
+        Ok(observation)
+    }
+
+    async fn persist_working_memory_on_thread(
+        &self,
+        thread_id: Uuid,
+        working_memory: &WorkingMemory,
+    ) -> MemoryStoreResult<()> {
+        let thread = self
+            .store
+            .get_thread(thread_id)
+            .await?
+            .ok_or(MemoryStoreError::ThreadNotFound(thread_id))?;
+        let mut metadata = thread.metadata;
+        set_working_memory_metadata(&mut metadata, working_memory)?;
+        self.store
+            .update_thread(UpdateThreadRequest {
+                thread_id,
+                resource_id: None,
+                title: None,
+                metadata: Some(metadata),
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn persist_observation_on_thread(
+        &self,
+        thread_id: Uuid,
+        observation: &Observation,
+    ) -> MemoryStoreResult<()> {
+        let thread = self
+            .store
+            .get_thread(thread_id)
+            .await?
+            .ok_or(MemoryStoreError::ThreadNotFound(thread_id))?;
+        let mut metadata = thread.metadata;
+        let mut observations = observations_from_metadata(&metadata)?;
+        let mut persisted = observation.clone();
+        persisted.thread_id = thread_id;
+        persisted.resource_id = Some(thread.resource_id);
+        observations.push(persisted);
+        set_observations_metadata(&mut metadata, &observations)?;
+        self.store
+            .update_thread(UpdateThreadRequest {
+                thread_id,
+                resource_id: None,
+                title: None,
+                metadata: Some(metadata),
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn replace_observations_on_thread(
+        &self,
+        thread_id: Uuid,
+        observations: &[Observation],
+    ) -> MemoryStoreResult<()> {
+        let thread = self
+            .store
+            .get_thread(thread_id)
+            .await?
+            .ok_or(MemoryStoreError::ThreadNotFound(thread_id))?;
+        let mut metadata = thread.metadata;
+        set_observations_metadata(&mut metadata, observations)?;
+        self.store
+            .update_thread(UpdateThreadRequest {
+                thread_id,
+                resource_id: None,
+                title: None,
+                metadata: Some(metadata),
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn resource_scoped_working_memory(
+        &self,
+        resource_id: &str,
+    ) -> MemoryStoreResult<Option<WorkingMemory>> {
+        let threads = self
+            .store
+            .list_threads(ListThreadsQuery {
+                resource_id: Some(resource_id.to_owned()),
+                pagination: unbounded_pagination(),
+            })
+            .await?;
+        Ok(threads
+            .items
+            .into_iter()
+            .filter_map(|thread| working_memory_from_thread(&thread))
+            .find(|working_memory| working_memory.scope == MemoryScope::Resource))
     }
 }
 
@@ -104,6 +438,27 @@ impl MemoryEngine for Memory {
             })
             .await
             .map_err(map_store_error)?;
+
+        if working_memory_from_thread(&thread).is_none() {
+            if let Some(working_memory) = self
+                .resource_scoped_working_memory(&thread.resource_id)
+                .await
+                .map_err(map_store_error)?
+            {
+                self.persist_working_memory_on_thread(thread.id, &working_memory)
+                    .await
+                    .map_err(map_store_error)?;
+                let thread = self
+                    .store
+                    .get_thread(thread.id)
+                    .await
+                    .map_err(map_store_error)?
+                    .ok_or_else(|| {
+                        MastraError::not_found(format!("thread '{}' was not found", thread.id))
+                    })?;
+                return Ok(thread_to_core(thread));
+            }
+        }
 
         Ok(thread_to_core(thread))
     }
@@ -220,6 +575,108 @@ impl MemoryEngine for Memory {
         Ok(messages.into_iter().map(message_to_core).collect())
     }
 
+    async fn get_working_memory(
+        &self,
+        thread_id: &str,
+        _resource_id: Option<&str>,
+    ) -> mastra_core::Result<Option<CoreWorkingMemoryState>> {
+        let thread_id = parse_uuid(thread_id, "thread id")?;
+        let working_memory = self.working_memory(thread_id).await.map_err(map_store_error)?;
+
+        Ok(working_memory.map(working_memory_to_core))
+    }
+
+    async fn update_working_memory(
+        &self,
+        request: CoreUpdateWorkingMemoryRequest,
+    ) -> mastra_core::Result<CoreWorkingMemoryState> {
+        let thread_id = parse_uuid(&request.thread_id, "thread id")?;
+        let working_memory = self
+            .update_working_memory_with_format(
+                UpdateWorkingMemoryRequest {
+                    thread_id,
+                    resource_id: request.resource_id,
+                    scope: request.scope,
+                    format: request.format,
+                    template: request.template,
+                    content: request.content,
+                },
+                request.format,
+            )
+            .await
+            .map_err(map_store_error)?;
+
+        Ok(working_memory_to_core(working_memory))
+    }
+
+    async fn list_observations(
+        &self,
+        request: CoreObservationQuery,
+    ) -> mastra_core::Result<CoreObservationPage> {
+        let thread_id = parse_uuid(&request.thread_id, "thread id")?;
+        let observations = self
+            .observations(ListObservationsQuery {
+                thread_id,
+                resource_id: request.resource_id,
+                page: request.page,
+                per_page: request.per_page,
+            })
+            .await
+            .map_err(map_store_error)?;
+        let page = request.page.unwrap_or(0);
+        let per_page = request
+            .per_page
+            .unwrap_or_else(|| observations.len().max(1));
+        if per_page == 0 {
+            return Err(MastraError::validation(
+                "per_page must be greater than zero",
+            ));
+        }
+        let total = observations.len();
+        let start = page.saturating_mul(per_page);
+        let page_observations = observations
+            .into_iter()
+            .skip(start)
+            .take(per_page)
+            .collect::<Vec<_>>();
+        let has_more = start.saturating_add(page_observations.len()) < total;
+
+        Ok(CoreObservationPage {
+            observations: page_observations
+                .into_iter()
+                .map(observation_to_core)
+                .collect(),
+            total,
+            page,
+            per_page,
+            has_more,
+        })
+    }
+
+    async fn append_observation(
+        &self,
+        request: CoreAppendObservationRequest,
+    ) -> mastra_core::Result<CoreObservationRecord> {
+        let thread_id = parse_uuid(&request.thread_id, "thread id")?;
+        let observation = self
+            .append_observation(AppendObservationRequest {
+                thread_id,
+                resource_id: request.resource_id,
+                scope: request.scope,
+                content: request.content,
+                observed_message_ids: request
+                    .observed_message_ids
+                    .iter()
+                    .map(|message_id| parse_uuid(message_id, "message id"))
+                    .collect::<mastra_core::Result<Vec<_>>>()?,
+                metadata: request.metadata,
+            })
+            .await
+            .map_err(map_store_error)?;
+
+        Ok(observation_to_core(observation))
+    }
+
     async fn clone_thread(
         &self,
         request: CoreCloneThreadRequest,
@@ -231,6 +688,24 @@ impl MemoryEngine for Memory {
             .map(|value| parse_uuid(value, "new thread id"))
             .transpose()?;
 
+        let source_thread = self
+            .store
+            .get_thread(source_thread_id)
+            .await
+            .map_err(map_store_error)?
+            .ok_or_else(|| {
+                MastraError::not_found(format!("thread '{source_thread_id}' was not found"))
+            })?;
+        let source_messages = self
+            .store
+            .list_messages(ListMessagesQuery {
+                thread_id: source_thread_id,
+                pagination: unbounded_pagination(),
+            })
+            .await
+            .map_err(map_store_error)?
+            .items;
+        let filtered_source_messages = filter_cloned_messages(source_messages, &request)?;
         let thread = self
             .store
             .clone_thread(CloneThreadRequest {
@@ -250,6 +725,51 @@ impl MemoryEngine for Memory {
             })
             .await
             .map_err(map_store_error)?;
+
+        if let Some(working_memory) = working_memory_from_thread(&source_thread) {
+            self.persist_working_memory_on_thread(thread.id, &working_memory)
+                .await
+                .map_err(map_store_error)?;
+        }
+
+        let source_observations = observations_from_thread(&source_thread);
+        if !source_observations.is_empty() {
+            let cloned_messages = self
+                .store
+                .list_messages(ListMessagesQuery {
+                    thread_id: thread.id,
+                    pagination: unbounded_pagination(),
+                })
+                .await
+                .map_err(map_store_error)?
+                .items;
+            let message_id_map = filtered_source_messages
+                .iter()
+                .zip(cloned_messages.iter())
+                .map(|(source, cloned)| (source.id, cloned.id))
+                .collect::<HashMap<_, _>>();
+            let remapped_observations = source_observations
+                .into_iter()
+                .map(|observation| Observation {
+                    id: Uuid::new_v4(),
+                    thread_id: thread.id,
+                    resource_id: Some(thread.resource_id.clone()),
+                    scope: observation.scope,
+                    content: observation.content,
+                    observed_message_ids: observation
+                        .observed_message_ids
+                        .iter()
+                        .filter_map(|message_id| message_id_map.get(message_id).copied())
+                        .collect::<Vec<_>>(),
+                    metadata: observation.metadata,
+                    created_at: observation.created_at,
+                    updated_at: Utc::now(),
+                })
+                .collect::<Vec<_>>();
+            self.replace_observations_on_thread(thread.id, &remapped_observations)
+                .await
+                .map_err(map_store_error)?;
+        }
 
         Ok(thread_to_core(thread))
     }
@@ -361,6 +881,36 @@ fn message_to_core(message: Message) -> MemoryMessage {
     }
 }
 
+fn working_memory_to_core(working_memory: WorkingMemory) -> CoreWorkingMemoryState {
+    CoreWorkingMemoryState {
+        thread_id: working_memory.thread_id.to_string(),
+        resource_id: working_memory.resource_id,
+        scope: working_memory.scope,
+        format: working_memory.format,
+        template: working_memory.template,
+        content: working_memory.content,
+        updated_at: working_memory.updated_at,
+    }
+}
+
+fn observation_to_core(observation: Observation) -> CoreObservationRecord {
+    CoreObservationRecord {
+        id: observation.id.to_string(),
+        thread_id: observation.thread_id.to_string(),
+        resource_id: observation.resource_id,
+        scope: observation.scope,
+        content: observation.content,
+        observed_message_ids: observation
+            .observed_message_ids
+            .into_iter()
+            .map(|message_id| message_id.to_string())
+            .collect(),
+        metadata: observation.metadata,
+        created_at: observation.created_at,
+        updated_at: observation.updated_at,
+    }
+}
+
 fn role_to_core(role: MessageRole) -> MemoryRole {
     match role {
         MessageRole::System => MemoryRole::System,
@@ -408,6 +958,136 @@ fn filter_messages(
 
 fn unbounded_pagination() -> Pagination {
     Pagination::new(0, i32::MAX as usize)
+}
+
+fn set_working_memory_metadata(
+    metadata: &mut Value,
+    working_memory: &WorkingMemory,
+) -> MemoryStoreResult<()> {
+    let object = ensure_object(metadata);
+    object.insert(
+        WORKING_MEMORY_METADATA_KEY.to_owned(),
+        serde_json::to_value(working_memory)
+            .map_err(|error| MemoryStoreError::Backend(error.to_string()))?,
+    );
+    Ok(())
+}
+
+fn set_observations_metadata(
+    metadata: &mut Value,
+    observations: &[Observation],
+) -> MemoryStoreResult<()> {
+    let object = ensure_object(metadata);
+    object.insert(
+        OBSERVATIONS_METADATA_KEY.to_owned(),
+        serde_json::to_value(observations)
+            .map_err(|error| MemoryStoreError::Backend(error.to_string()))?,
+    );
+    Ok(())
+}
+
+fn observations_from_thread(thread: &Thread) -> Vec<Observation> {
+    observations_from_metadata(&thread.metadata)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mut observation| {
+            observation.thread_id = thread.id;
+            observation.resource_id = Some(thread.resource_id.clone());
+            observation
+        })
+        .collect()
+}
+
+fn observations_from_metadata(metadata: &Value) -> MemoryStoreResult<Vec<Observation>> {
+    let Some(value) = metadata
+        .as_object()
+        .and_then(|object| object.get(OBSERVATIONS_METADATA_KEY))
+    else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_value(value.clone())
+        .map_err(|error| MemoryStoreError::Backend(error.to_string()))
+}
+
+fn working_memory_from_thread(thread: &Thread) -> Option<WorkingMemory> {
+    working_memory_from_metadata(&thread.metadata).map(|mut working_memory| {
+        working_memory.thread_id = thread.id;
+        working_memory.resource_id = Some(thread.resource_id.clone());
+        working_memory
+    })
+}
+
+fn working_memory_from_metadata(metadata: &Value) -> Option<WorkingMemory> {
+    metadata
+        .as_object()
+        .and_then(|object| object.get(WORKING_MEMORY_METADATA_KEY))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+}
+
+fn ensure_object(metadata: &mut Value) -> &mut Map<String, Value> {
+    if !metadata.is_object() {
+        *metadata = Value::Object(Map::new());
+    }
+
+    metadata
+        .as_object_mut()
+        .expect("metadata should be an object after initialization")
+}
+
+fn filter_cloned_messages(
+    messages: Vec<Message>,
+    request: &CoreCloneThreadRequest,
+) -> mastra_core::Result<Vec<Message>> {
+    let mut filtered = messages;
+
+    if let Some(message_ids) = request.message_ids.as_ref() {
+        let allowed = parse_uuid_list(message_ids, "message id")?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        filtered.retain(|message| allowed.contains(&message.id));
+    }
+
+    if let Some(start_date) = request.start_date {
+        filtered.retain(|message| message.created_at >= start_date);
+    }
+
+    if let Some(end_date) = request.end_date {
+        filtered.retain(|message| message.created_at <= end_date);
+    }
+
+    if let Some(limit) = request.message_limit {
+        let start = filtered.len().saturating_sub(limit);
+        filtered = filtered.into_iter().skip(start).collect();
+    }
+
+    Ok(filtered)
+}
+
+fn filter_cloned_messages_facade(
+    messages: Vec<Message>,
+    request: &CloneThreadRequest,
+) -> Vec<Message> {
+    let mut filtered = messages;
+
+    if let Some(message_ids) = request.message_ids.as_ref() {
+        let allowed = message_ids.iter().copied().collect::<HashSet<_>>();
+        filtered.retain(|message| allowed.contains(&message.id));
+    }
+
+    if let Some(start_date) = request.start_date {
+        filtered.retain(|message| message.created_at >= start_date);
+    }
+
+    if let Some(end_date) = request.end_date {
+        filtered.retain(|message| message.created_at <= end_date);
+    }
+
+    if let Some(limit) = request.message_limit {
+        let start = filtered.len().saturating_sub(limit);
+        filtered = filtered.into_iter().skip(start).collect();
+    }
+
+    filtered
 }
 
 #[cfg(test)]
