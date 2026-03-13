@@ -416,6 +416,47 @@ pub struct AppendMemoryMessagesResponse {
     pub appended: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MessageIdReference {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum DeleteMemoryMessagesInput {
+    MessageId(String),
+    MessageIds(Vec<String>),
+    Message(MessageIdReference),
+    Messages(Vec<MessageIdReference>),
+}
+
+impl DeleteMemoryMessagesInput {
+    pub fn into_ids(self) -> Vec<String> {
+        match self {
+            Self::MessageId(id) => vec![id],
+            Self::MessageIds(ids) => ids,
+            Self::Message(reference) => vec![reference.id],
+            Self::Messages(references) => references
+                .into_iter()
+                .map(|reference| reference.id)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeleteMemoryMessagesRequest {
+    #[serde(alias = "messageIds")]
+    pub message_ids: DeleteMemoryMessagesInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeleteMemoryMessagesResponse {
+    pub success: bool,
+    pub message: String,
+    pub deleted: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ListMemoryMessagesResponse {
     pub messages: Vec<MemoryMessage>,
@@ -425,7 +466,7 @@ pub struct ListMemoryMessagesResponse {
 mod tests {
     use serde_json::json;
 
-    use super::{GenerateRequest, StartWorkflowRunRequest};
+    use super::{DeleteMemoryMessagesRequest, GenerateRequest, StartWorkflowRunRequest};
 
     #[test]
     fn generate_request_deserializes_official_camel_case_fields() {
@@ -462,5 +503,28 @@ mod tests {
         assert_eq!(request.resource_id.as_deref(), Some("resource-7"));
         assert_eq!(request.input_data, Some(json!({ "topic": "rust" })));
         assert_eq!(request.request_context["trace_id"], json!("trace-1"));
+    }
+
+    #[test]
+    fn delete_memory_messages_request_accepts_string_or_object_collections() {
+        let single: DeleteMemoryMessagesRequest = serde_json::from_value(json!({
+            "messageIds": "message-1"
+        }))
+        .expect("single string id should deserialize");
+
+        assert_eq!(single.message_ids.into_ids(), vec!["message-1".to_owned()]);
+
+        let objects: DeleteMemoryMessagesRequest = serde_json::from_value(json!({
+            "messageIds": [
+                { "id": "message-2" },
+                { "id": "message-3" }
+            ]
+        }))
+        .expect("object list should deserialize");
+
+        assert_eq!(
+            objects.message_ids.into_ids(),
+            vec!["message-2".to_owned(), "message-3".to_owned()]
+        );
     }
 }

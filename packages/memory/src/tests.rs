@@ -176,6 +176,90 @@ async fn bridge_implements_core_memory_engine() {
 }
 
 #[tokio::test]
+async fn bridge_deletes_messages_by_id_without_thread_context() {
+    let memory = Memory::new(InMemoryMemoryStore::default());
+    let first_thread = MemoryEngine::create_thread(
+        &memory,
+        CoreCreateThreadRequest {
+            id: None,
+            resource_id: Some("resource-bridge-delete".into()),
+            title: Some("Bridge delete".into()),
+            metadata: json!({}),
+        },
+    )
+    .await
+    .expect("first thread should be created");
+    let second_thread = MemoryEngine::create_thread(
+        &memory,
+        CoreCreateThreadRequest {
+            id: None,
+            resource_id: Some("resource-bridge-delete".into()),
+            title: Some("Bridge delete 2".into()),
+            metadata: json!({}),
+        },
+    )
+    .await
+    .expect("second thread should be created");
+
+    MemoryEngine::append_messages(
+        &memory,
+        &first_thread.id,
+        vec![MemoryMessage {
+            id: Uuid::new_v4().to_string(),
+            thread_id: first_thread.id.clone(),
+            role: MemoryRole::User,
+            content: "keep first".into(),
+            created_at: Utc::now(),
+            metadata: json!({}),
+        }],
+    )
+    .await
+    .expect("first thread message should be stored");
+    let deleted_message_id = Uuid::new_v4().to_string();
+    MemoryEngine::append_messages(
+        &memory,
+        &second_thread.id,
+        vec![MemoryMessage {
+            id: deleted_message_id.clone(),
+            thread_id: second_thread.id.clone(),
+            role: MemoryRole::Assistant,
+            content: "delete second".into(),
+            created_at: Utc::now(),
+            metadata: json!({}),
+        }],
+    )
+    .await
+    .expect("second thread message should be stored");
+
+    let deleted = MemoryEngine::delete_messages(&memory, vec![deleted_message_id.clone()])
+        .await
+        .expect("message should be deleted by id");
+    let second_thread_messages = MemoryEngine::list_messages(
+        &memory,
+        mastra_core::MemoryRecallRequest {
+            thread_id: second_thread.id.clone(),
+            limit: Some(10),
+        },
+    )
+    .await
+    .expect("second thread messages should be listed");
+    let first_thread_messages = MemoryEngine::list_messages(
+        &memory,
+        mastra_core::MemoryRecallRequest {
+            thread_id: first_thread.id.clone(),
+            limit: Some(10),
+        },
+    )
+    .await
+    .expect("first thread messages should be listed");
+
+    assert_eq!(deleted, 1);
+    assert!(second_thread_messages.is_empty());
+    assert_eq!(first_thread_messages.len(), 1);
+    assert_eq!(first_thread_messages[0].content, "keep first");
+}
+
+#[tokio::test]
 async fn memory_facade_lists_threads_and_messages() {
     let memory = Memory::in_memory();
     let thread = memory

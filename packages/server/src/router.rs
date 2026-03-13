@@ -20,12 +20,12 @@ use crate::{
     contracts::{
         AgentDetailResponse, AppendMemoryMessagesRequest, AppendMemoryMessagesResponse,
         CloneMemoryThreadRequest, CloneMemoryThreadResponse, CreateMemoryThreadRequest,
-        CreateMemoryThreadResponse, CreateWorkflowRunRequest, ErrorResponse, ExecuteToolRequest,
-        ExecuteToolResponse, GenerateRequest, GenerateStreamEvent, GetMemoryThreadResponse,
-        ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse, ListThreadsResponse,
-        ListToolsResponse, ListWorkflowRunsResponse, ListWorkflowsResponse, RouteDescription,
-        StartWorkflowRunRequest, StartWorkflowRunResponse, WorkflowDetailResponse,
-        WorkflowRunRecord,
+        CreateMemoryThreadResponse, CreateWorkflowRunRequest, DeleteMemoryMessagesRequest,
+        DeleteMemoryMessagesResponse, ErrorResponse, ExecuteToolRequest, ExecuteToolResponse,
+        GenerateRequest, GenerateStreamEvent, GetMemoryThreadResponse, ListAgentsResponse,
+        ListMemoriesResponse, ListMemoryMessagesResponse, ListThreadsResponse, ListToolsResponse,
+        ListWorkflowRunsResponse, ListWorkflowsResponse, RouteDescription, StartWorkflowRunRequest,
+        StartWorkflowRunResponse, WorkflowDetailResponse, WorkflowRunRecord,
     },
     error::{ServerError, ServerResult},
     registry::RuntimeRegistry,
@@ -133,6 +133,10 @@ impl MastraServer {
                 post(append_default_memory_messages).get(list_default_memory_messages),
             )
             .route(
+                "/memory/messages/delete",
+                post(delete_default_memory_messages),
+            )
+            .route(
                 "/memory/{memory_id}/threads",
                 get(list_memory_threads).post(create_memory_thread),
             )
@@ -147,6 +151,10 @@ impl MastraServer {
             .route(
                 "/memory/{memory_id}/threads/{thread_id}/messages",
                 post(append_memory_messages).get(list_memory_messages),
+            )
+            .route(
+                "/memory/{memory_id}/messages/delete",
+                post(delete_memory_messages),
             )
             .route("/workflows", get(list_workflows))
             .route(
@@ -244,6 +252,11 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
             "/memory/threads/{thread_id}/messages",
             "Append messages to a memory thread",
         ),
+        (
+            "POST",
+            "/memory/messages/delete",
+            "Delete messages from memory",
+        ),
         ("GET", "/memory/{memory_id}/threads", "List memory threads"),
         (
             "POST",
@@ -274,6 +287,11 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
             "POST",
             "/memory/{memory_id}/threads/{thread_id}/messages",
             "Append messages to a memory thread",
+        ),
+        (
+            "POST",
+            "/memory/{memory_id}/messages/delete",
+            "Delete messages from memory",
         ),
         ("GET", "/workflows", "List registered workflows"),
         (
@@ -725,6 +743,44 @@ async fn list_memory_messages_for(
 }
 
 #[instrument(skip(state, request))]
+async fn delete_default_memory_messages(
+    State(state): State<AppState>,
+    Json(request): Json<DeleteMemoryMessagesRequest>,
+) -> ServerResult<Json<DeleteMemoryMessagesResponse>> {
+    let memory = state.registry.find_default_memory()?;
+    delete_memory_messages_for(memory, request).await
+}
+
+#[instrument(skip(state, request))]
+async fn delete_memory_messages(
+    State(state): State<AppState>,
+    Path(memory_id): Path<String>,
+    Json(request): Json<DeleteMemoryMessagesRequest>,
+) -> ServerResult<Json<DeleteMemoryMessagesResponse>> {
+    let memory = state.registry.find_memory(&memory_id)?;
+    delete_memory_messages_for(memory, request).await
+}
+
+async fn delete_memory_messages_for(
+    memory: Arc<dyn MemoryEngine>,
+    request: DeleteMemoryMessagesRequest,
+) -> ServerResult<Json<DeleteMemoryMessagesResponse>> {
+    let deleted = memory
+        .delete_messages(request.message_ids.into_ids())
+        .await
+        .map_err(ServerError::internal)?;
+
+    Ok(Json(DeleteMemoryMessagesResponse {
+        success: true,
+        message: format!(
+            "{deleted} message{} deleted successfully",
+            if deleted == 1 { "" } else { "s" }
+        ),
+        deleted,
+    }))
+}
+
+#[instrument(skip(state, request))]
 async fn create_workflow_run(
     State(state): State<AppState>,
     Path(workflow_id): Path<String>,
@@ -805,7 +861,10 @@ fn encode_stream_event(event: GenerateStreamEvent) -> Event {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    };
 
     use async_trait::async_trait;
     use axum::{
@@ -1053,6 +1112,20 @@ mod tests {
                 .insert(cloned_thread.id.clone(), cloned_messages);
 
             Ok(cloned_thread)
+        }
+
+        async fn delete_messages(&self, message_ids: Vec<String>) -> mastra_core::Result<usize> {
+            let message_ids = message_ids.into_iter().collect::<HashSet<_>>();
+            let mut deleted = 0;
+            let mut messages = self.messages.write();
+
+            for thread_messages in messages.values_mut() {
+                let before = thread_messages.len();
+                thread_messages.retain(|message| !message_ids.contains(&message.id));
+                deleted += before - thread_messages.len();
+            }
+
+            Ok(deleted)
         }
 
         async fn delete_thread(&self, thread_id: &str) -> mastra_core::Result<()> {
@@ -1708,6 +1781,252 @@ mod tests {
             .unwrap();
 
         assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn deletes_messages_from_default_memory_with_official_route_shape() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_memory("default", Arc::new(TestMemory::default()));
+        let router = server.into_router();
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/threads")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-delete-messages",
+                            "title": "Delete some messages",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let create_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let create_payload: Value = serde_json::from_slice(&create_body).unwrap();
+        let thread_id = create_payload["thread"]["id"].as_str().unwrap().to_owned();
+
+        let append_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/memory/threads/{thread_id}/messages"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages": [
+                                { "role": "user", "content": "keep me" },
+                                { "role": "assistant", "content": "delete me" }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(append_response.status(), StatusCode::OK);
+
+        let list_before_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/memory/threads/{thread_id}/messages"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(list_before_response.status(), StatusCode::OK);
+        let list_before_body = to_bytes(list_before_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_before_payload: Value = serde_json::from_slice(&list_before_body).unwrap();
+        let deleted_message_id = list_before_payload["messages"][1]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let delete_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/messages/delete")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messageIds": deleted_message_id,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(delete_response.status(), StatusCode::OK);
+        let delete_body = to_bytes(delete_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let delete_payload: Value = serde_json::from_slice(&delete_body).unwrap();
+        assert_eq!(delete_payload["success"], true);
+        assert_eq!(delete_payload["message"], "1 message deleted successfully");
+        assert_eq!(delete_payload["deleted"], 1);
+
+        let list_after_response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/memory/threads/{thread_id}/messages"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(list_after_response.status(), StatusCode::OK);
+        let list_after_body = to_bytes(list_after_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_after_payload: Value = serde_json::from_slice(&list_after_body).unwrap();
+        assert_eq!(list_after_payload["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(list_after_payload["messages"][0]["content"], "keep me");
+    }
+
+    #[tokio::test]
+    async fn deletes_messages_from_named_memory_with_object_message_ids() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_memory("archive", Arc::new(TestMemory::default()));
+        let router = server.into_router();
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/archive/threads")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-archive",
+                            "title": "Archive thread",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let create_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let create_payload: Value = serde_json::from_slice(&create_body).unwrap();
+        let thread_id = create_payload["thread"]["id"].as_str().unwrap().to_owned();
+
+        let append_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/memory/archive/threads/{thread_id}/messages"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages": [
+                                { "role": "user", "content": "first" },
+                                { "role": "assistant", "content": "second" },
+                                { "role": "assistant", "content": "third" }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(append_response.status(), StatusCode::OK);
+
+        let list_before_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/memory/archive/threads/{thread_id}/messages"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(list_before_response.status(), StatusCode::OK);
+        let list_before_body = to_bytes(list_before_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_before_payload: Value = serde_json::from_slice(&list_before_body).unwrap();
+        let deleted_message_id = list_before_payload["messages"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let delete_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/archive/messages/delete")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messageIds": [{ "id": deleted_message_id }],
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(delete_response.status(), StatusCode::OK);
+        let delete_body = to_bytes(delete_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let delete_payload: Value = serde_json::from_slice(&delete_body).unwrap();
+        assert_eq!(delete_payload["success"], true);
+        assert_eq!(delete_payload["message"], "1 message deleted successfully");
+        assert_eq!(delete_payload["deleted"], 1);
+
+        let list_after_response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/memory/archive/threads/{thread_id}/messages"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(list_after_response.status(), StatusCode::OK);
+        let list_after_body = to_bytes(list_after_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_after_payload: Value = serde_json::from_slice(&list_after_body).unwrap();
+        assert_eq!(list_after_payload["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(list_after_payload["messages"][0]["content"], "second");
+        assert_eq!(list_after_payload["messages"][1]["content"], "third");
     }
 
     #[tokio::test]

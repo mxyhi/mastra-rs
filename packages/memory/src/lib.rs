@@ -2,7 +2,7 @@ mod in_memory;
 mod model;
 mod store;
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 use mastra_core::{
@@ -191,6 +191,60 @@ impl MemoryEngine for Memory {
             .map_err(map_store_error)?;
 
         Ok(thread_to_core(thread))
+    }
+
+    async fn delete_messages(&self, message_ids: Vec<String>) -> mastra_core::Result<usize> {
+        if message_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let mut remaining = message_ids
+            .into_iter()
+            .map(|message_id| parse_uuid(&message_id, "message id"))
+            .collect::<mastra_core::Result<HashSet<_>>>()?;
+        let threads = self
+            .store
+            .list_threads(ListThreadsQuery {
+                resource_id: None,
+                pagination: Pagination::new(0, usize::MAX),
+            })
+            .await
+            .map_err(map_store_error)?;
+        let mut deleted = 0;
+
+        // The core trait deletes by message id only, so we resolve message ownership here and
+        // then delegate to the existing per-thread store deletion API.
+        for thread in threads.items {
+            if remaining.is_empty() {
+                break;
+            }
+
+            let messages = self
+                .store
+                .list_messages(ListMessagesQuery {
+                    thread_id: thread.id,
+                    pagination: Pagination::new(0, usize::MAX),
+                })
+                .await
+                .map_err(map_store_error)?;
+            let matched = messages
+                .items
+                .into_iter()
+                .filter_map(|message| remaining.remove(&message.id).then_some(message.id))
+                .collect::<Vec<_>>();
+
+            if matched.is_empty() {
+                continue;
+            }
+
+            deleted += self
+                .store
+                .delete_messages(DeleteMessagesRequest::new(thread.id, matched))
+                .await
+                .map_err(map_store_error)?;
+        }
+
+        Ok(deleted)
     }
 
     async fn delete_thread(&self, thread_id: &str) -> mastra_core::Result<()> {

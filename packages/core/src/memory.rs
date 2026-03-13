@@ -89,6 +89,12 @@ pub trait MemoryEngine: Send + Sync {
         ))
     }
 
+    async fn delete_messages(&self, _message_ids: Vec<String>) -> Result<usize> {
+        Err(MastraError::storage(
+            "memory engine does not support deleting messages",
+        ))
+    }
+
     async fn delete_thread(&self, _thread_id: &str) -> Result<()> {
         Err(MastraError::storage(
             "memory engine does not support thread deletion",
