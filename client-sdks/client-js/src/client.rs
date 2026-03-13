@@ -9,17 +9,42 @@ use reqwest::{
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use url::Url;
+use uuid::Uuid;
 
 use crate::{
     MastraClientError,
     types::{
         AppendMemoryMessagesRequest, AppendMemoryMessagesResponse, CreateMemoryThreadRequest,
-        CreateMemoryThreadResponse, CreateWorkflowRunRequest, ErrorResponse, GenerateRequest,
-        GenerateResponse, GenerateStreamEvent, ListAgentsResponse, ListMemoriesResponse,
-        ListMemoryMessagesResponse, ListThreadsResponse, ListWorkflowsResponse,
-        StartWorkflowRunRequest, StartWorkflowRunResponse, WorkflowRunRecord,
+        CreateMemoryThreadResponse, CreateWorkflowRunRequest, DeleteMemoryMessagesRequest,
+        DeleteMemoryMessagesResponse, ErrorResponse, GenerateRequest, GenerateResponse,
+        GenerateStreamEvent, ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse,
+        ListMessagesQuery, ListThreadsQuery, ListThreadsResponse, ListWorkflowRunsResponse,
+        ListWorkflowsResponse, StartWorkflowRunRequest, StartWorkflowRunResponse,
+        SystemPackagesResponse, WorkflowRunRecord, WorkflowStreamEvent,
     },
 };
+
+trait StreamProtocolEvent: DeserializeOwned {
+    fn error_message(&self) -> Option<String>;
+}
+
+impl StreamProtocolEvent for GenerateStreamEvent {
+    fn error_message(&self) -> Option<String> {
+        match self {
+            Self::Error(error) => Some(error.error.clone()),
+            _ => None,
+        }
+    }
+}
+
+impl StreamProtocolEvent for WorkflowStreamEvent {
+    fn error_message(&self) -> Option<String> {
+        match self {
+            Self::Error(error) => Some(error.error.clone()),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MastraClient {
@@ -209,6 +234,12 @@ impl MastraClient {
             memory_id: memory_id.into(),
         }
     }
+
+    pub async fn system_packages(&self) -> Result<SystemPackagesResponse, MastraClientError> {
+        self.inner
+            .request(Method::GET, "/system/packages", Option::<&()>::None)
+            .await
+    }
 }
 
 impl AgentsClient {
@@ -314,6 +345,59 @@ impl WorkflowClient {
             )
             .await
     }
+
+    pub async fn runs(&self) -> Result<ListWorkflowRunsResponse, MastraClientError> {
+        self.inner
+            .request(
+                Method::GET,
+                &format!("/workflows/{}/runs", self.workflow_id),
+                Option::<&()>::None,
+            )
+            .await
+    }
+
+    pub async fn stream(
+        &self,
+        request: StartWorkflowRunRequest,
+    ) -> Result<
+        impl Stream<Item = Result<WorkflowStreamEvent, MastraClientError>> + Send + 'static,
+        MastraClientError,
+    > {
+        let run_id = Uuid::now_v7().to_string();
+        self.stream_internal(Some(run_id), request).await
+    }
+
+    pub async fn stream_with_run_id(
+        &self,
+        run_id: &str,
+        request: StartWorkflowRunRequest,
+    ) -> Result<
+        impl Stream<Item = Result<WorkflowStreamEvent, MastraClientError>> + Send + 'static,
+        MastraClientError,
+    > {
+        self.stream_internal(Some(run_id.to_owned()), request).await
+    }
+
+    async fn stream_internal(
+        &self,
+        run_id: Option<String>,
+        request: StartWorkflowRunRequest,
+    ) -> Result<
+        impl Stream<Item = Result<WorkflowStreamEvent, MastraClientError>> + Send + 'static,
+        MastraClientError,
+    > {
+        let query = run_id.map(|run_id| [("runId", run_id)]);
+        let response = self
+            .inner
+            .stream_request_with_query(
+                Method::POST,
+                &format!("/workflows/{}/stream", self.workflow_id),
+                query.as_ref(),
+                Some(&request),
+            )
+            .await?;
+        Ok(decode_event_stream(response))
+    }
 }
 
 impl MemoriesClient {
@@ -326,10 +410,19 @@ impl MemoriesClient {
 
 impl MemoryClient {
     pub async fn threads(&self) -> Result<ListThreadsResponse, MastraClientError> {
+        self.threads_with_query(ListThreadsQuery::default()).await
+    }
+
+    pub async fn threads_with_query(
+        &self,
+        query: ListThreadsQuery,
+    ) -> Result<ListThreadsResponse, MastraClientError> {
+        let query = ThreadQueryWire::try_from(query)?;
         self.inner
-            .request(
+            .request_with_query(
                 Method::GET,
                 &format!("/memory/{}/threads", self.memory_id),
+                Some(&query),
                 Option::<&()>::None,
             )
             .await
@@ -366,11 +459,61 @@ impl MemoryClient {
         &self,
         thread_id: &str,
     ) -> Result<ListMemoryMessagesResponse, MastraClientError> {
+        self.messages_with_query(thread_id, ListMessagesQuery::default())
+            .await
+    }
+
+    pub async fn messages_with_query(
+        &self,
+        thread_id: &str,
+        query: ListMessagesQuery,
+    ) -> Result<ListMemoryMessagesResponse, MastraClientError> {
         self.inner
-            .request(
+            .request_with_query(
                 Method::GET,
                 &format!("/memory/{}/threads/{thread_id}/messages", self.memory_id),
+                Some(&query),
                 Option::<&()>::None,
+            )
+            .await
+    }
+
+    pub async fn clone_thread(
+        &self,
+        thread_id: &str,
+        request: crate::CloneMemoryThreadRequest,
+    ) -> Result<crate::CloneMemoryThreadResponse, MastraClientError> {
+        self.inner
+            .request(
+                Method::POST,
+                &format!("/memory/{}/threads/{thread_id}/clone", self.memory_id),
+                Some(&request),
+            )
+            .await
+    }
+
+    pub async fn delete_thread(&self, thread_id: &str) -> Result<(), MastraClientError> {
+        let response = self
+            .inner
+            .send(
+                Method::DELETE,
+                &format!("/memory/{}/threads/{thread_id}", self.memory_id),
+                None::<&()>,
+            )
+            .await?;
+        ensure_success(response).await?;
+        Ok(())
+    }
+
+    pub async fn delete_messages(
+        &self,
+        request: DeleteMemoryMessagesRequest,
+    ) -> Result<DeleteMemoryMessagesResponse, MastraClientError> {
+        self.inner
+            .request(
+                Method::POST,
+                &format!("/memory/{}/messages/delete", self.memory_id),
+                Some(&request),
             )
             .await
     }
@@ -387,7 +530,23 @@ impl ClientInner {
         ResponseBody: DeserializeOwned,
         RequestBody: Serialize + ?Sized,
     {
-        let response = self.send(method, path, body).await?;
+        self.request_with_query(method, path, None::<&()>, body)
+            .await
+    }
+
+    async fn request_with_query<ResponseBody, Query, RequestBody>(
+        &self,
+        method: Method,
+        path: &str,
+        query: Option<&Query>,
+        body: Option<&RequestBody>,
+    ) -> Result<ResponseBody, MastraClientError>
+    where
+        ResponseBody: DeserializeOwned,
+        Query: Serialize + ?Sized,
+        RequestBody: Serialize + ?Sized,
+    {
+        let response = self.send_with_query(method, path, query, body).await?;
         decode_response(response).await
     }
 
@@ -400,7 +559,22 @@ impl ClientInner {
     where
         RequestBody: Serialize + ?Sized,
     {
-        let response = self.send(method, path, body).await?;
+        self.stream_request_with_query(method, path, None::<&()>, body)
+            .await
+    }
+
+    async fn stream_request_with_query<Query, RequestBody>(
+        &self,
+        method: Method,
+        path: &str,
+        query: Option<&Query>,
+        body: Option<&RequestBody>,
+    ) -> Result<Response, MastraClientError>
+    where
+        Query: Serialize + ?Sized,
+        RequestBody: Serialize + ?Sized,
+    {
+        let response = self.send_with_query(method, path, query, body).await?;
         ensure_success(response).await
     }
 
@@ -413,8 +587,27 @@ impl ClientInner {
     where
         RequestBody: Serialize + ?Sized,
     {
+        self.send_with_query(method, path, None::<&()>, body).await
+    }
+
+    async fn send_with_query<Query, RequestBody>(
+        &self,
+        method: Method,
+        path: &str,
+        query: Option<&Query>,
+        body: Option<&RequestBody>,
+    ) -> Result<Response, MastraClientError>
+    where
+        Query: Serialize + ?Sized,
+        RequestBody: Serialize + ?Sized,
+    {
         let url = self.endpoint(path)?;
         let request = self.http.request(method, url);
+        let request = if let Some(query) = query {
+            request.query(query)
+        } else {
+            request
+        };
         let request = if let Some(body) = body {
             request.json(body)
         } else {
@@ -469,9 +662,12 @@ async fn ensure_success(response: Response) -> Result<Response, MastraClientErro
     })
 }
 
-fn decode_event_stream(
+fn decode_event_stream<EventType>(
     response: Response,
-) -> impl Stream<Item = Result<GenerateStreamEvent, MastraClientError>> + Send + 'static {
+) -> impl Stream<Item = Result<EventType, MastraClientError>> + Send + 'static
+where
+    EventType: StreamProtocolEvent + Send + 'static,
+{
     try_stream! {
         let mut stream = response.bytes_stream();
         let mut buffer = String::new();
@@ -491,7 +687,7 @@ fn decode_event_stream(
                 }
 
                 if line.is_empty() {
-                    if let Some(event) = flush_event(&mut current_event, &mut data_lines)? {
+                    if let Some(event) = flush_event::<EventType>(&mut current_event, &mut data_lines)? {
                         yield event;
                     }
                     continue;
@@ -512,16 +708,19 @@ fn decode_event_stream(
             }
         }
 
-        if let Some(event) = flush_event(&mut current_event, &mut data_lines)? {
+        if let Some(event) = flush_event::<EventType>(&mut current_event, &mut data_lines)? {
             yield event;
         }
     }
 }
 
-fn flush_event(
+fn flush_event<EventType>(
     current_event: &mut Option<String>,
     data_lines: &mut Vec<String>,
-) -> Result<Option<GenerateStreamEvent>, MastraClientError> {
+) -> Result<Option<EventType>, MastraClientError>
+where
+    EventType: StreamProtocolEvent,
+{
     if data_lines.is_empty() {
         *current_event = None;
         return Ok(None);
@@ -529,13 +728,14 @@ fn flush_event(
 
     let payload = data_lines.join("\n");
     data_lines.clear();
-    let parsed = serde_json::from_str::<GenerateStreamEvent>(&payload)
+    let parsed = serde_json::from_str::<EventType>(&payload)
         .map_err(|error| MastraClientError::StreamProtocol(error.to_string()))?;
     *current_event = None;
 
-    match parsed {
-        GenerateStreamEvent::Error(error) => Err(MastraClientError::StreamProtocol(error.error)),
-        event => Ok(Some(event)),
+    if let Some(error) = parsed.error_message() {
+        Err(MastraClientError::StreamProtocol(error))
+    } else {
+        Ok(Some(parsed))
     }
 }
 
@@ -545,5 +745,41 @@ fn normalize_api_prefix(prefix: &str) -> String {
         String::new()
     } else {
         format!("/{}", trimmed.trim_matches('/'))
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ThreadQueryWire {
+    #[serde(skip_serializing_if = "Option::is_none", rename = "page")]
+    page: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "perPage")]
+    per_page: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "resourceId")]
+    resource_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<String>,
+}
+
+impl TryFrom<ListThreadsQuery> for ThreadQueryWire {
+    type Error = MastraClientError;
+
+    fn try_from(query: ListThreadsQuery) -> Result<Self, Self::Error> {
+        let metadata = query
+            .metadata
+            .map(|value| {
+                serde_json::to_string(&value).map_err(|error| MastraClientError::Api {
+                    status: StatusCode::BAD_REQUEST,
+                    body: error.to_string(),
+                    error: None,
+                })
+            })
+            .transpose()?;
+
+        Ok(Self {
+            page: query.page,
+            per_page: query.per_page,
+            resource_id: query.resource_id,
+            metadata,
+        })
     }
 }

@@ -162,6 +162,12 @@ async fn bridge_implements_core_memory_engine() {
         mastra_core::MemoryRecallRequest {
             thread_id: thread.id.clone(),
             limit: Some(10),
+            resource_id: None,
+            page: None,
+            per_page: None,
+            message_ids: None,
+            start_date: None,
+            end_date: None,
         },
     )
     .await
@@ -239,6 +245,12 @@ async fn bridge_deletes_messages_by_id_without_thread_context() {
         mastra_core::MemoryRecallRequest {
             thread_id: second_thread.id.clone(),
             limit: Some(10),
+            resource_id: None,
+            page: None,
+            per_page: None,
+            message_ids: None,
+            start_date: None,
+            end_date: None,
         },
     )
     .await
@@ -248,6 +260,12 @@ async fn bridge_deletes_messages_by_id_without_thread_context() {
         mastra_core::MemoryRecallRequest {
             thread_id: first_thread.id.clone(),
             limit: Some(10),
+            resource_id: None,
+            page: None,
+            per_page: None,
+            message_ids: None,
+            start_date: None,
+            end_date: None,
         },
     )
     .await

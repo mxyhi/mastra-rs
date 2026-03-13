@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use mastra_core::{MemoryMessage, Thread, Tool};
 use serde::{Deserialize, Serialize};
@@ -244,6 +245,51 @@ pub struct StartWorkflowRunRequest {
     pub request_context: IndexMap<String, Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkflowStreamStartEvent {
+    pub run_id: String,
+    pub workflow_id: String,
+    #[serde(default)]
+    pub resource_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkflowStreamStepEvent {
+    pub run_id: String,
+    pub workflow_id: String,
+    pub step_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkflowStreamFinishEvent {
+    pub run_id: String,
+    pub workflow_id: String,
+    pub status: String,
+    pub result: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WorkflowStreamEvent {
+    Start(WorkflowStreamStartEvent),
+    StepStart(WorkflowStreamStepEvent),
+    StepFinish(WorkflowStreamStepEvent),
+    Finish(WorkflowStreamFinishEvent),
+    Error(ErrorResponse),
+}
+
+impl WorkflowStreamEvent {
+    pub fn event_name(&self) -> &'static str {
+        match self {
+            Self::Start(_) => "start",
+            Self::StepStart(_) => "step_start",
+            Self::StepFinish(_) => "step_finish",
+            Self::Finish(_) => "finish",
+            Self::Error(_) => "error",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowRunStatus {
@@ -315,6 +361,7 @@ pub struct StartWorkflowRunResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ListWorkflowRunsResponse {
     pub runs: Vec<WorkflowRunRecord>,
+    pub total: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -353,6 +400,29 @@ pub struct GetMemoryThreadResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CloneMemoryThreadOptions {
+    #[serde(default)]
+    #[serde(alias = "messageLimit")]
+    pub message_limit: Option<usize>,
+    #[serde(default)]
+    #[serde(alias = "messageFilter")]
+    pub message_filter: Option<CloneMemoryThreadMessageFilter>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CloneMemoryThreadMessageFilter {
+    #[serde(default)]
+    #[serde(alias = "startDate")]
+    pub start_date: Option<DateTime<Utc>>,
+    #[serde(default)]
+    #[serde(alias = "endDate")]
+    pub end_date: Option<DateTime<Utc>>,
+    #[serde(default)]
+    #[serde(alias = "messageIds")]
+    pub message_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CloneMemoryThreadRequest {
     #[serde(default)]
     #[serde(alias = "newThreadId")]
@@ -364,6 +434,42 @@ pub struct CloneMemoryThreadRequest {
     pub title: Option<String>,
     #[serde(default)]
     pub metadata: Option<Value>,
+    #[serde(default)]
+    #[serde(alias = "messageLimit")]
+    pub message_limit: Option<usize>,
+    #[serde(default)]
+    pub options: Option<CloneMemoryThreadOptions>,
+}
+
+impl CloneMemoryThreadRequest {
+    pub fn requested_message_limit(&self) -> Option<usize> {
+        self.message_limit.or_else(|| {
+            self.options
+                .as_ref()
+                .and_then(|options| options.message_limit)
+        })
+    }
+
+    pub fn requested_message_ids(&self) -> Option<Vec<String>> {
+        self.options
+            .as_ref()
+            .and_then(|options| options.message_filter.as_ref())
+            .and_then(|filter| filter.message_ids.clone())
+    }
+
+    pub fn requested_start_date(&self) -> Option<DateTime<Utc>> {
+        self.options
+            .as_ref()
+            .and_then(|options| options.message_filter.as_ref())
+            .and_then(|filter| filter.start_date)
+    }
+
+    pub fn requested_end_date(&self) -> Option<DateTime<Utc>> {
+        self.options
+            .as_ref()
+            .and_then(|options| options.message_filter.as_ref())
+            .and_then(|filter| filter.end_date)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -375,6 +481,10 @@ pub struct CloneMemoryThreadResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ListThreadsResponse {
     pub threads: Vec<Thread>,
+    pub total: usize,
+    pub page: usize,
+    pub per_page: usize,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -460,6 +570,75 @@ pub struct DeleteMemoryMessagesResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ListMemoryMessagesResponse {
     pub messages: Vec<MemoryMessage>,
+    pub total: usize,
+    pub page: usize,
+    pub per_page: usize,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListThreadsQuery {
+    #[serde(default)]
+    #[serde(alias = "page")]
+    pub page: Option<usize>,
+    #[serde(default)]
+    #[serde(rename = "perPage", alias = "per_page")]
+    pub per_page: Option<usize>,
+    #[serde(default)]
+    #[serde(rename = "resourceId", alias = "resource_id")]
+    pub resource_id: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<String>,
+}
+
+impl ListThreadsQuery {
+    pub fn parsed_metadata(&self) -> Result<Option<Value>, String> {
+        self.metadata
+            .as_ref()
+            .map(|raw| serde_json::from_str(raw).map_err(|error| error.to_string()))
+            .transpose()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListMessagesQuery {
+    #[serde(default)]
+    #[serde(alias = "page")]
+    pub page: Option<usize>,
+    #[serde(default)]
+    #[serde(rename = "perPage", alias = "per_page")]
+    pub per_page: Option<usize>,
+    #[serde(default)]
+    #[serde(rename = "resourceId", alias = "resource_id")]
+    pub resource_id: Option<String>,
+    #[serde(default)]
+    #[serde(rename = "messageIds", alias = "message_ids")]
+    pub message_ids: Option<Vec<String>>,
+    #[serde(default)]
+    #[serde(rename = "startDate", alias = "start_date")]
+    pub start_date: Option<DateTime<Utc>>,
+    #[serde(default)]
+    #[serde(rename = "endDate", alias = "end_date")]
+    pub end_date: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowStreamQuery {
+    #[serde(rename = "runId", alias = "run_id")]
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SystemPackage {
+    pub name: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SystemPackagesResponse {
+    pub packages: Vec<SystemPackage>,
+    pub is_dev: bool,
+    pub cms_enabled: bool,
 }
 
 #[cfg(test)]

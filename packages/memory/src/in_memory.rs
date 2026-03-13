@@ -166,18 +166,19 @@ impl MemoryStore for InMemoryMemoryStore {
             .cloned()
             .unwrap_or_default();
         let now = Utc::now();
+        let metadata = input.metadata.clone();
+        let title = input.title.clone();
+        let resource_id = input.resource_id.clone();
         let cloned_thread = Thread {
             id: input.new_thread_id.unwrap_or_else(Uuid::new_v4),
-            resource_id: input.resource_id.unwrap_or(source_thread.resource_id),
-            title: input
-                .title
-                .unwrap_or_else(|| format!("{} (copy)", source_thread.title)),
-            metadata: input.metadata.unwrap_or(source_thread.metadata),
+            resource_id: resource_id.unwrap_or(source_thread.resource_id),
+            title: title.unwrap_or_else(|| format!("{} (Copy)", source_thread.title)),
+            metadata: metadata.unwrap_or(source_thread.metadata),
             created_at: now,
             updated_at: now,
         };
 
-        let cloned_messages = source_messages
+        let cloned_messages = filtered_clone_messages(source_messages, &input)
             .into_iter()
             .map(|message| Message {
                 id: Uuid::new_v4(),
@@ -242,4 +243,28 @@ impl MemoryStore for InMemoryMemoryStore {
         state.messages.remove(&thread_id);
         Ok(())
     }
+}
+
+fn filtered_clone_messages(messages: Vec<Message>, request: &CloneThreadRequest) -> Vec<Message> {
+    let mut filtered = messages;
+
+    if let Some(message_ids) = request.message_ids.as_ref() {
+        let message_ids = message_ids.iter().copied().collect::<HashSet<_>>();
+        filtered.retain(|message| message_ids.contains(&message.id));
+    }
+
+    if let Some(start_date) = request.start_date {
+        filtered.retain(|message| message.created_at >= start_date);
+    }
+
+    if let Some(end_date) = request.end_date {
+        filtered.retain(|message| message.created_at <= end_date);
+    }
+
+    if let Some(message_limit) = request.message_limit {
+        let start = filtered.len().saturating_sub(message_limit);
+        filtered = filtered.into_iter().skip(start).collect();
+    }
+
+    filtered
 }

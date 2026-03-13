@@ -5,6 +5,7 @@ mod store;
 use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use mastra_core::{
     CloneThreadRequest as CoreCloneThreadRequest, CreateThreadRequest as CoreCreateThreadRequest,
     MastraError, MemoryEngine, MemoryMessage, MemoryRecallRequest, MemoryRole,
@@ -119,7 +120,7 @@ impl MemoryEngine for Memory {
         self.store
             .list_threads(ListThreadsQuery {
                 resource_id: resource_id.map(str::to_string),
-                pagination: Pagination::new(0, usize::MAX),
+                pagination: unbounded_pagination(),
             })
             .await
             .map(|page| page.items.into_iter().map(thread_to_core).collect())
@@ -157,14 +158,42 @@ impl MemoryEngine for Memory {
         request: MemoryRecallRequest,
     ) -> mastra_core::Result<Vec<MemoryMessage>> {
         let thread_id = parse_uuid(&request.thread_id, "thread id")?;
-        self.store
-            .history(HistoryQuery {
+        if let Some(resource_id) = request.resource_id.as_deref() {
+            let thread = self
+                .store
+                .get_thread(thread_id)
+                .await
+                .map_err(map_store_error)?
+                .ok_or_else(|| {
+                    MastraError::not_found(format!("thread '{thread_id}' was not found"))
+                })?;
+            if thread.resource_id != resource_id {
+                return Ok(Vec::new());
+            }
+        }
+
+        let mut messages = self
+            .store
+            .list_messages(ListMessagesQuery {
                 thread_id,
-                limit: request.limit,
+                pagination: unbounded_pagination(),
             })
             .await
-            .map(|messages| messages.into_iter().map(message_to_core).collect())
-            .map_err(map_store_error)
+            .map_err(map_store_error)?
+            .items;
+        messages = filter_messages(
+            messages,
+            request.message_ids.as_ref(),
+            request.start_date,
+            request.end_date,
+        );
+
+        if let Some(limit) = request.limit {
+            let start = messages.len().saturating_sub(limit);
+            messages = messages.into_iter().skip(start).collect();
+        }
+
+        Ok(messages.into_iter().map(message_to_core).collect())
     }
 
     async fn clone_thread(
@@ -186,6 +215,14 @@ impl MemoryEngine for Memory {
                 resource_id: request.resource_id,
                 title: request.title,
                 metadata: request.metadata,
+                message_limit: request.message_limit,
+                message_ids: request
+                    .message_ids
+                    .as_ref()
+                    .map(|ids| parse_uuid_list(ids, "message id"))
+                    .transpose()?,
+                start_date: request.start_date,
+                end_date: request.end_date,
             })
             .await
             .map_err(map_store_error)?;
@@ -206,7 +243,7 @@ impl MemoryEngine for Memory {
             .store
             .list_threads(ListThreadsQuery {
                 resource_id: None,
-                pagination: Pagination::new(0, usize::MAX),
+                pagination: unbounded_pagination(),
             })
             .await
             .map_err(map_store_error)?;
@@ -223,7 +260,7 @@ impl MemoryEngine for Memory {
                 .store
                 .list_messages(ListMessagesQuery {
                     thread_id: thread.id,
-                    pagination: Pagination::new(0, usize::MAX),
+                    pagination: unbounded_pagination(),
                 })
                 .await
                 .map_err(map_store_error)?;
@@ -259,6 +296,13 @@ impl MemoryEngine for Memory {
 fn parse_uuid(value: &str, label: &str) -> mastra_core::Result<Uuid> {
     Uuid::parse_str(value)
         .map_err(|error| MastraError::validation(format!("invalid {label} '{value}': {error}")))
+}
+
+fn parse_uuid_list(values: &[String], label: &str) -> mastra_core::Result<Vec<Uuid>> {
+    values
+        .iter()
+        .map(|value| parse_uuid(value, label))
+        .collect::<mastra_core::Result<Vec<_>>>()
 }
 
 fn map_store_error(error: MemoryStoreError) -> MastraError {
@@ -308,6 +352,37 @@ fn role_from_core(role: MemoryRole) -> MessageRole {
         MemoryRole::Assistant => MessageRole::Assistant,
         MemoryRole::Tool => MessageRole::Tool,
     }
+}
+
+fn filter_messages(
+    messages: Vec<Message>,
+    message_ids: Option<&Vec<String>>,
+    start_date: Option<DateTime<Utc>>,
+    end_date: Option<DateTime<Utc>>,
+) -> Vec<Message> {
+    let mut filtered = messages;
+
+    if let Some(message_ids) = message_ids {
+        let allowed = message_ids
+            .iter()
+            .filter_map(|id| Uuid::parse_str(id).ok())
+            .collect::<HashSet<_>>();
+        filtered.retain(|message| allowed.contains(&message.id));
+    }
+
+    if let Some(start_date) = start_date {
+        filtered.retain(|message| message.created_at >= start_date);
+    }
+
+    if let Some(end_date) = end_date {
+        filtered.retain(|message| message.created_at <= end_date);
+    }
+
+    filtered
+}
+
+fn unbounded_pagination() -> Pagination {
+    Pagination::new(0, i32::MAX as usize)
 }
 
 #[cfg(test)]

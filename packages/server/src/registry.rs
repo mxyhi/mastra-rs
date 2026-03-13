@@ -195,10 +195,19 @@ impl RuntimeRegistry {
         workflow_id: &str,
         request: &StartWorkflowRunRequest,
     ) -> ServerResult<WorkflowRunRecord> {
+        self.begin_workflow_run_with_id(workflow_id, request, Uuid::now_v7())
+    }
+
+    pub fn begin_workflow_run_with_id(
+        &self,
+        workflow_id: &str,
+        request: &StartWorkflowRunRequest,
+        run_id: Uuid,
+    ) -> ServerResult<WorkflowRunRecord> {
         self.ensure_workflow_exists(workflow_id)?;
 
         let run = WorkflowRunRecord {
-            run_id: Uuid::now_v7(),
+            run_id,
             workflow_id: workflow_id.to_owned(),
             status: WorkflowRunStatus::Running,
             resource_id: request.resource_id.clone(),

@@ -1,8 +1,9 @@
-use std::{convert::Infallible, net::SocketAddr, sync::Arc, time::Duration};
+use std::{convert::Infallible, fs, net::SocketAddr, sync::Arc, time::Duration};
 
+use async_stream::stream;
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
@@ -23,9 +24,12 @@ use crate::{
         CreateMemoryThreadResponse, CreateWorkflowRunRequest, DeleteMemoryMessagesRequest,
         DeleteMemoryMessagesResponse, ErrorResponse, ExecuteToolRequest, ExecuteToolResponse,
         GenerateRequest, GenerateStreamEvent, GetMemoryThreadResponse, ListAgentsResponse,
-        ListMemoriesResponse, ListMemoryMessagesResponse, ListThreadsResponse, ListToolsResponse,
-        ListWorkflowRunsResponse, ListWorkflowsResponse, RouteDescription, StartWorkflowRunRequest,
-        StartWorkflowRunResponse, WorkflowDetailResponse, WorkflowRunRecord,
+        ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery, ListThreadsQuery,
+        ListThreadsResponse, ListToolsResponse, ListWorkflowRunsResponse, ListWorkflowsResponse,
+        RouteDescription, StartWorkflowRunRequest, StartWorkflowRunResponse, SystemPackage,
+        SystemPackagesResponse, WorkflowDetailResponse, WorkflowRunRecord, WorkflowStreamEvent,
+        WorkflowStreamFinishEvent, WorkflowStreamQuery, WorkflowStreamStartEvent,
+        WorkflowStreamStepEvent,
     },
     error::{ServerError, ServerResult},
     registry::RuntimeRegistry,
@@ -103,6 +107,7 @@ impl MastraServer {
         let api_router = Router::new()
             .route("/health", get(health))
             .route("/routes", get(routes))
+            .route("/system/packages", get(system_packages))
             .route("/agents", get(list_agents))
             .route("/agents/{agent_id}", get(get_agent))
             .route("/agents/{agent_id}/generate", post(generate_agent))
@@ -166,6 +171,7 @@ impl MastraServer {
                 "/workflows/{workflow_id}/start-async",
                 post(start_workflow_async),
             )
+            .route("/workflows/{workflow_id}/stream", post(stream_workflow))
             .route("/workflows/{workflow_id}/runs", get(list_workflow_runs))
             .route(
                 "/workflows/{workflow_id}/runs/{run_id}",
@@ -199,6 +205,7 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
     [
         ("GET", "/health", "Health check"),
         ("GET", "/routes", "List registered routes"),
+        ("GET", "/system/packages", "List installed system packages"),
         ("GET", "/agents", "List registered agents"),
         ("GET", "/agents/{agent_id}", "Get a registered agent"),
         (
@@ -310,6 +317,11 @@ pub fn route_catalog(prefix: &str) -> Vec<RouteDescription> {
             "Execute a workflow run immediately",
         ),
         (
+            "POST",
+            "/workflows/{workflow_id}/stream",
+            "Stream workflow execution events",
+        ),
+        (
             "GET",
             "/workflows/{workflow_id}/runs",
             "List workflow run records",
@@ -344,6 +356,15 @@ async fn health() -> &'static str {
 
 async fn routes(State(state): State<AppState>) -> Json<Vec<RouteDescription>> {
     Json(route_catalog(&state.api_prefix))
+}
+
+#[instrument]
+async fn system_packages() -> Json<SystemPackagesResponse> {
+    Json(SystemPackagesResponse {
+        packages: load_system_packages(),
+        is_dev: std::env::var("MASTRA_DEV").is_ok_and(|value| value == "true"),
+        cms_enabled: std::env::var("MASTRA_CMS_ENABLED").is_ok_and(|value| value == "true"),
+    })
 }
 
 #[instrument(skip(state))]
@@ -485,29 +506,46 @@ async fn execute_tool(
 #[instrument(skip(state))]
 async fn list_default_memory_threads(
     State(state): State<AppState>,
+    Query(query): Query<ListThreadsQuery>,
 ) -> ServerResult<Json<ListThreadsResponse>> {
     let memory = state.registry.find_default_memory()?;
-    list_memory_threads_for(memory).await
+    list_memory_threads_for(memory, query).await
 }
 
 #[instrument(skip(state))]
 async fn list_memory_threads(
     State(state): State<AppState>,
     Path(memory_id): Path<String>,
+    Query(query): Query<ListThreadsQuery>,
 ) -> ServerResult<Json<ListThreadsResponse>> {
     let memory = state.registry.find_memory(&memory_id)?;
-    list_memory_threads_for(memory).await
+    list_memory_threads_for(memory, query).await
 }
 
 async fn list_memory_threads_for(
     memory: Arc<dyn MemoryEngine>,
+    query: ListThreadsQuery,
 ) -> ServerResult<Json<ListThreadsResponse>> {
+    let metadata = query
+        .parsed_metadata()
+        .map_err(|error| ServerError::BadRequest(format!("invalid metadata filter: {error}")))?;
     let threads = memory
-        .list_threads(None)
+        .list_threads_page(mastra_core::MemoryThreadQuery {
+            resource_id: query.resource_id,
+            metadata,
+            page: query.page,
+            per_page: query.per_page,
+        })
         .await
         .map_err(ServerError::internal)?;
 
-    Ok(Json(ListThreadsResponse { threads }))
+    Ok(Json(ListThreadsResponse {
+        threads: threads.threads,
+        total: threads.total,
+        page: threads.page,
+        per_page: threads.per_page,
+        has_more: threads.has_more,
+    }))
 }
 
 #[instrument(skip(state, request))]
@@ -634,6 +672,10 @@ async fn clone_memory_thread_for(
     source_thread_id: String,
     request: CloneMemoryThreadRequest,
 ) -> ServerResult<Json<CloneMemoryThreadResponse>> {
+    let message_limit = request.requested_message_limit();
+    let message_ids = request.requested_message_ids();
+    let start_date = request.requested_start_date();
+    let end_date = request.requested_end_date();
     let thread = memory
         .clone_thread(CloneThreadRequest {
             source_thread_id,
@@ -641,6 +683,10 @@ async fn clone_memory_thread_for(
             resource_id: request.resource_id,
             title: request.title,
             metadata: request.metadata,
+            message_limit,
+            message_ids,
+            start_date,
+            end_date,
         })
         .await
         .map_err(ServerError::internal)?;
@@ -649,6 +695,12 @@ async fn clone_memory_thread_for(
         .list_messages(MemoryRecallRequest {
             thread_id: thread.id.clone(),
             limit: None,
+            resource_id: None,
+            page: None,
+            per_page: None,
+            message_ids: None,
+            start_date: None,
+            end_date: None,
         })
         .await
         .map_err(ServerError::internal)?;
@@ -713,33 +765,48 @@ async fn append_memory_messages_for(
 async fn list_default_memory_messages(
     State(state): State<AppState>,
     Path(thread_id): Path<String>,
+    Query(query): Query<ListMessagesQuery>,
 ) -> ServerResult<Json<ListMemoryMessagesResponse>> {
     let memory = state.registry.find_default_memory()?;
-    list_memory_messages_for(memory, thread_id).await
+    list_memory_messages_for(memory, thread_id, query).await
 }
 
 #[instrument(skip(state))]
 async fn list_memory_messages(
     State(state): State<AppState>,
     Path((memory_id, thread_id)): Path<(String, String)>,
+    Query(query): Query<ListMessagesQuery>,
 ) -> ServerResult<Json<ListMemoryMessagesResponse>> {
     let memory = state.registry.find_memory(&memory_id)?;
-    list_memory_messages_for(memory, thread_id).await
+    list_memory_messages_for(memory, thread_id, query).await
 }
 
 async fn list_memory_messages_for(
     memory: Arc<dyn MemoryEngine>,
     thread_id: String,
+    query: ListMessagesQuery,
 ) -> ServerResult<Json<ListMemoryMessagesResponse>> {
     let messages = memory
-        .list_messages(MemoryRecallRequest {
+        .list_messages_page(MemoryRecallRequest {
             thread_id,
             limit: None,
+            resource_id: query.resource_id,
+            page: query.page,
+            per_page: query.per_page,
+            message_ids: query.message_ids,
+            start_date: query.start_date,
+            end_date: query.end_date,
         })
         .await
         .map_err(ServerError::internal)?;
 
-    Ok(Json(ListMemoryMessagesResponse { messages }))
+    Ok(Json(ListMemoryMessagesResponse {
+        messages: messages.messages,
+        total: messages.total,
+        page: messages.page,
+        per_page: messages.per_page,
+        has_more: messages.has_more,
+    }))
 }
 
 #[instrument(skip(state, request))]
@@ -823,13 +890,105 @@ async fn start_workflow_async(
     }
 }
 
+#[instrument(skip(state, request))]
+async fn stream_workflow(
+    State(state): State<AppState>,
+    Path(workflow_id): Path<String>,
+    Query(query): Query<WorkflowStreamQuery>,
+    Json(request): Json<StartWorkflowRunRequest>,
+) -> ServerResult<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>> {
+    let workflow = state.registry.find_workflow(&workflow_id)?;
+    let run_id = query.run_id;
+    let run_uuid = Uuid::parse_str(&run_id)
+        .map_err(|error| ServerError::BadRequest(format!("invalid runId '{run_id}': {error}")))?;
+    let run = state
+        .registry
+        .begin_workflow_run_with_id(&workflow_id, &request, run_uuid)?;
+    let mut step_ids = workflow
+        .detail()
+        .steps
+        .into_iter()
+        .map(|step| step.id)
+        .collect::<Vec<_>>();
+    if step_ids.is_empty() {
+        step_ids.push("workflow".to_owned());
+    }
+    let registry = state.registry.clone();
+    let workflow_id_for_events = workflow_id.clone();
+
+    let event_stream = stream! {
+        yield Ok(encode_workflow_stream_event(WorkflowStreamEvent::Start(
+            WorkflowStreamStartEvent {
+                run_id: run_id.clone(),
+                workflow_id: workflow_id_for_events.clone(),
+                resource_id: run.resource_id.clone(),
+            },
+        )));
+
+        for step_id in &step_ids {
+            yield Ok(encode_workflow_stream_event(WorkflowStreamEvent::StepStart(
+                WorkflowStreamStepEvent {
+                    run_id: run_id.clone(),
+                    workflow_id: workflow_id_for_events.clone(),
+                    step_id: step_id.clone(),
+                },
+            )));
+        }
+
+        match workflow.start(request).await {
+            Ok(result) => {
+                for step_id in &step_ids {
+                    yield Ok(encode_workflow_stream_event(WorkflowStreamEvent::StepFinish(
+                        WorkflowStreamStepEvent {
+                            run_id: run_id.clone(),
+                            workflow_id: workflow_id_for_events.clone(),
+                            step_id: step_id.clone(),
+                        },
+                    )));
+                }
+
+                match registry.complete_workflow_run_success(run_uuid, result.clone()) {
+                    Ok(_) => {
+                        yield Ok(encode_workflow_stream_event(WorkflowStreamEvent::Finish(
+                            WorkflowStreamFinishEvent {
+                                run_id: run_id.clone(),
+                                workflow_id: workflow_id_for_events.clone(),
+                                status: "success".to_owned(),
+                                result,
+                            },
+                        )));
+                    }
+                    Err(error) => {
+                        yield Ok(encode_workflow_stream_event(WorkflowStreamEvent::Error(
+                            ErrorResponse {
+                                error: error.to_string(),
+                            },
+                        )));
+                    }
+                }
+            }
+            Err(error) => {
+                let _ = registry.complete_workflow_run_failure(run_uuid, &error);
+                yield Ok(encode_workflow_stream_event(WorkflowStreamEvent::Error(
+                    ErrorResponse {
+                        error: error.to_string(),
+                    },
+                )));
+            }
+        }
+    };
+
+    Ok(Sse::new(event_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
 #[instrument(skip(state))]
 async fn list_workflow_runs(
     State(state): State<AppState>,
     Path(workflow_id): Path<String>,
 ) -> ServerResult<Json<ListWorkflowRunsResponse>> {
     let runs = state.registry.list_workflow_runs(&workflow_id)?;
-    Ok(Json(ListWorkflowRunsResponse { runs }))
+    let total = runs.len();
+    Ok(Json(ListWorkflowRunsResponse { runs, total }))
 }
 
 #[instrument(skip(state))]
@@ -859,6 +1018,32 @@ fn encode_stream_event(event: GenerateStreamEvent) -> Event {
     Event::default().event(event.event_name()).data(data)
 }
 
+fn encode_workflow_stream_event(event: WorkflowStreamEvent) -> Event {
+    let data = serde_json::to_string(&event).unwrap_or_else(|error| {
+        serde_json::json!({
+            "type": "error",
+            "error": {
+                "error": error.to_string(),
+            },
+        })
+        .to_string()
+    });
+
+    Event::default().event(event.event_name()).data(data)
+}
+
+fn load_system_packages() -> Vec<SystemPackage> {
+    let Some(path) = std::env::var_os("MASTRA_PACKAGES_FILE") else {
+        return Vec::new();
+    };
+
+    let Ok(content) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+
+    serde_json::from_str(&content).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -876,7 +1061,8 @@ mod tests {
     use mastra_core::{
         Agent, AgentConfig, CloneThreadRequest, CreateThreadRequest,
         FinishReason as CoreFinishReason, MemoryConfig, MemoryEngine, MemoryMessage,
-        MemoryRecallRequest, ModelRequest, ModelResponse, ModelToolCall, StaticModel, Thread, Tool,
+        MemoryRecallRequest, MemoryRole, ModelRequest, ModelResponse, ModelToolCall, StaticModel,
+        Thread, Tool,
     };
     use parking_lot::RwLock;
     use serde_json::{Value, json};
@@ -894,7 +1080,7 @@ mod tests {
         runtime::{AgentRuntime, WorkflowRuntime},
     };
 
-    use super::MastraServer;
+    use super::{MastraServer, list_memory_messages_for};
 
     struct EchoAgent;
 
@@ -1054,12 +1240,43 @@ mod tests {
             &self,
             request: MemoryRecallRequest,
         ) -> mastra_core::Result<Vec<MemoryMessage>> {
+            if let Some(resource_id) = request.resource_id.as_deref() {
+                let thread = self
+                    .threads
+                    .read()
+                    .get(&request.thread_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        mastra_core::MastraError::not_found(format!(
+                            "thread '{}' was not found",
+                            request.thread_id
+                        ))
+                    })?;
+                if thread.resource_id.as_deref() != Some(resource_id) {
+                    return Ok(Vec::new());
+                }
+            }
+
             let mut messages = self
                 .messages
                 .read()
                 .get(&request.thread_id)
                 .cloned()
                 .unwrap_or_default();
+
+            if let Some(message_ids) = request.message_ids.as_ref() {
+                let allowed = message_ids.iter().collect::<HashSet<_>>();
+                messages.retain(|message| allowed.contains(&message.id));
+            }
+
+            if let Some(start_date) = request.start_date {
+                messages.retain(|message| message.created_at >= start_date);
+            }
+
+            if let Some(end_date) = request.end_date {
+                messages.retain(|message| message.created_at <= end_date);
+            }
+
             if let Some(limit) = request.limit {
                 let start = messages.len().saturating_sub(limit);
                 messages = messages[start..].to_vec();
@@ -1090,12 +1307,32 @@ mod tests {
                 metadata: request.metadata.unwrap_or(source_thread.metadata),
             };
 
-            let cloned_messages = self
+            let mut source_messages = self
                 .messages
                 .read()
                 .get(&request.source_thread_id)
                 .cloned()
-                .unwrap_or_default()
+                .unwrap_or_default();
+
+            if let Some(message_ids) = request.message_ids.as_ref() {
+                let allowed = message_ids.iter().collect::<HashSet<_>>();
+                source_messages.retain(|message| allowed.contains(&message.id));
+            }
+
+            if let Some(start_date) = request.start_date {
+                source_messages.retain(|message| message.created_at >= start_date);
+            }
+
+            if let Some(end_date) = request.end_date {
+                source_messages.retain(|message| message.created_at <= end_date);
+            }
+
+            if let Some(message_limit) = request.message_limit {
+                let start = source_messages.len().saturating_sub(message_limit);
+                source_messages = source_messages.into_iter().skip(start).collect();
+            }
+
+            let cloned_messages = source_messages
                 .into_iter()
                 .map(|message| MemoryMessage {
                     id: Uuid::now_v7().to_string(),
@@ -1504,6 +1741,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streams_workflows_as_sse_and_persists_requested_run_id() {
+        let registry = RuntimeRegistry::new();
+        registry.register_workflow(JsonWorkflow);
+
+        let response = MastraServer::new(registry.clone())
+            .into_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/demo/stream?runId=018f7f26-8b7e-7c9d-b145-2c3d4e5f6789")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "resourceId": "resource-stream",
+                            "inputData": {"topic": "rust"}
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("event: start"));
+        assert!(body.contains("event: step_start"));
+        assert!(body.contains("event: step_finish"));
+        assert!(body.contains("event: finish"));
+        assert!(body.contains("\"run_id\":\"018f7f26-8b7e-7c9d-b145-2c3d4e5f6789\""));
+        assert!(body.contains("\"workflow_id\":\"demo\""));
+
+        let run = registry
+            .get_workflow_run(
+                "demo",
+                Uuid::parse_str("018f7f26-8b7e-7c9d-b145-2c3d4e5f6789").unwrap(),
+            )
+            .expect("streamed workflow run should be recorded");
+        assert_eq!(run.status, WorkflowRunStatus::Success);
+        assert_eq!(run.resource_id.as_deref(), Some("resource-stream"));
+    }
+
+    #[tokio::test]
+    async fn rejects_workflow_stream_requests_without_run_id() {
+        let registry = RuntimeRegistry::new();
+        registry.register_workflow(JsonWorkflow);
+
+        let response = MastraServer::new(registry)
+            .into_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/demo/stream")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "resourceId": "resource-stream",
+                            "inputData": {"topic": "rust"}
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn starts_workflows_and_persists_run_records() {
         let response = build_router()
             .oneshot(
@@ -1722,6 +2030,305 @@ mod tests {
         );
         assert_eq!(clone_payload["cloned_messages"][0]["content"], "hello");
         assert_eq!(clone_payload["cloned_messages"][1]["content"], "world");
+    }
+
+    #[tokio::test]
+    async fn clones_only_requested_message_subset() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_memory("default", Arc::new(TestMemory::default()));
+        let router = server.into_router();
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/threads")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-clone-limit",
+                            "title": "Clone subset",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let create_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let create_payload: Value = serde_json::from_slice(&create_body).unwrap();
+        let source_thread_id = create_payload["thread"]["id"].as_str().unwrap().to_owned();
+
+        let append_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/memory/threads/{source_thread_id}/messages"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages": [
+                                { "role": "user", "content": "first" },
+                                { "role": "assistant", "content": "second" },
+                                { "role": "assistant", "content": "third" }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(append_response.status(), StatusCode::OK);
+
+        let clone_response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/memory/threads/{source_thread_id}/clone"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "title": "Last message only",
+                            "messageLimit": 1
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(clone_response.status(), StatusCode::OK);
+        let clone_body = to_bytes(clone_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let clone_payload: Value = serde_json::from_slice(&clone_body).unwrap();
+        assert_eq!(
+            clone_payload["cloned_messages"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(clone_payload["cloned_messages"][0]["content"], "third");
+    }
+
+    #[tokio::test]
+    async fn clones_requested_message_ids_from_nested_filter_options() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_memory("default", Arc::new(TestMemory::default()));
+        let router = server.into_router();
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/threads")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-clone-filter",
+                            "title": "Clone by message id",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let create_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let create_payload: Value = serde_json::from_slice(&create_body).unwrap();
+        let source_thread_id = create_payload["thread"]["id"].as_str().unwrap().to_owned();
+
+        let append_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/memory/threads/{source_thread_id}/messages"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages": [
+                                { "role": "user", "content": "first" },
+                                { "role": "assistant", "content": "second" },
+                                { "role": "assistant", "content": "third" }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(append_response.status(), StatusCode::OK);
+
+        let messages_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/memory/threads/{source_thread_id}/messages"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let messages_body = to_bytes(messages_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let messages_payload: Value = serde_json::from_slice(&messages_body).unwrap();
+        let second_message_id = messages_payload["messages"][1]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let clone_response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/memory/threads/{source_thread_id}/clone"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "title": "Specific clone",
+                            "options": {
+                                "messageFilter": {
+                                    "messageIds": [second_message_id]
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(clone_response.status(), StatusCode::OK);
+        let clone_body = to_bytes(clone_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let clone_payload: Value = serde_json::from_slice(&clone_body).unwrap();
+        assert_eq!(
+            clone_payload["cloned_messages"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(clone_payload["cloned_messages"][0]["content"], "second");
+    }
+
+    #[tokio::test]
+    async fn clones_only_messages_selected_by_filter() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_memory("default", Arc::new(TestMemory::default()));
+        let router = server.into_router();
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/threads")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-clone-filter",
+                            "title": "Clone filter",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let create_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let create_payload: Value = serde_json::from_slice(&create_body).unwrap();
+        let source_thread_id = create_payload["thread"]["id"].as_str().unwrap().to_owned();
+
+        let append_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/memory/threads/{source_thread_id}/messages"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages": [
+                                { "role": "user", "content": "first" },
+                                { "role": "assistant", "content": "second" },
+                                { "role": "assistant", "content": "third" }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(append_response.status(), StatusCode::OK);
+
+        let list_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/memory/threads/{source_thread_id}/messages"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let list_body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_payload: Value = serde_json::from_slice(&list_body).unwrap();
+        let selected_message_id = list_payload["messages"][1]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let clone_response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/memory/threads/{source_thread_id}/clone"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "title": "Filtered clone",
+                            "options": {
+                                "messageFilter": {
+                                    "messageIds": [selected_message_id]
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(clone_response.status(), StatusCode::OK);
+        let clone_body = to_bytes(clone_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let clone_payload: Value = serde_json::from_slice(&clone_body).unwrap();
+        assert_eq!(
+            clone_payload["cloned_messages"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(clone_payload["cloned_messages"][0]["content"], "second");
     }
 
     #[tokio::test]
@@ -2030,6 +2637,265 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lists_memory_threads_with_official_pagination_shape() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_memory("default", Arc::new(TestMemory::default()));
+        let router = server.into_router();
+
+        for title in ["Thread A", "Thread B"] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/memory/threads")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            json!({
+                                "resourceId": "resource-page",
+                                "title": title,
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let list_response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/memory/threads?resourceId=resource-page&page=0&perPage=1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_payload: Value = serde_json::from_slice(&list_body).unwrap();
+        assert_eq!(list_payload["threads"].as_array().unwrap().len(), 1);
+        assert_eq!(list_payload["total"], 2);
+        assert_eq!(list_payload["page"], 0);
+        assert_eq!(list_payload["per_page"], 1);
+        assert_eq!(list_payload["has_more"], true);
+    }
+
+    #[tokio::test]
+    async fn filters_memory_threads_by_metadata_query() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_memory("default", Arc::new(TestMemory::default()));
+        let router = server.into_router();
+
+        for (title, scope) in [("Keep", "keep"), ("Skip", "skip")] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/memory/threads")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            json!({
+                                "resourceId": "resource-metadata",
+                                "title": title,
+                                "metadata": { "scope": scope }
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let list_response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/memory/threads?resourceId=resource-metadata&metadata=%7B%22scope%22%3A%22keep%22%7D")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_payload: Value = serde_json::from_slice(&list_body).unwrap();
+        assert_eq!(list_payload["threads"].as_array().unwrap().len(), 1);
+        assert_eq!(list_payload["threads"][0]["title"], "Keep");
+        assert_eq!(list_payload["total"], 1);
+    }
+
+    #[tokio::test]
+    async fn lists_memory_messages_with_pagination_shape() {
+        let server = MastraServer::new(RuntimeRegistry::new());
+        server.register_memory("default", Arc::new(TestMemory::default()));
+        let router = server.into_router();
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/threads")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-message-page",
+                            "title": "Message pagination",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let create_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let create_payload: Value = serde_json::from_slice(&create_body).unwrap();
+        let thread_id = create_payload["thread"]["id"].as_str().unwrap().to_owned();
+
+        let append_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/memory/threads/{thread_id}/messages"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages": [
+                                { "role": "user", "content": "first" },
+                                { "role": "assistant", "content": "second" }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(append_response.status(), StatusCode::OK);
+
+        let list_response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/memory/threads/{thread_id}/messages?page=1&perPage=1"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_payload: Value = serde_json::from_slice(&list_body).unwrap();
+        assert_eq!(list_payload["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(list_payload["messages"][0]["content"], "second");
+        assert_eq!(list_payload["total"], 2);
+        assert_eq!(list_payload["page"], 1);
+        assert_eq!(list_payload["per_page"], 1);
+        assert_eq!(list_payload["has_more"], false);
+    }
+
+    #[tokio::test]
+    async fn filters_memory_messages_by_resource_and_message_ids() {
+        let memory = Arc::new(TestMemory::default());
+        let thread = memory
+            .create_thread(CreateThreadRequest {
+                id: None,
+                resource_id: Some("resource-message-filter".to_owned()),
+                title: Some("Message filter thread".to_owned()),
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+        let first_id = Uuid::now_v7().to_string();
+        let second_id = Uuid::now_v7().to_string();
+        memory
+            .append_messages(
+                &thread.id,
+                vec![
+                    MemoryMessage {
+                        id: first_id.clone(),
+                        thread_id: thread.id.clone(),
+                        role: MemoryRole::User,
+                        content: "first".to_owned(),
+                        created_at: Utc::now(),
+                        metadata: json!({}),
+                    },
+                    MemoryMessage {
+                        id: second_id.clone(),
+                        thread_id: thread.id.clone(),
+                        role: MemoryRole::Assistant,
+                        content: "second".to_owned(),
+                        created_at: Utc::now(),
+                        metadata: json!({}),
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+
+        let response = list_memory_messages_for(
+            memory,
+            thread.id.clone(),
+            crate::contracts::ListMessagesQuery {
+                page: None,
+                per_page: None,
+                resource_id: Some("resource-message-filter".to_owned()),
+                message_ids: Some(vec![second_id.clone()]),
+                start_date: None,
+                end_date: None,
+            },
+        )
+        .await
+        .unwrap()
+        .0;
+
+        assert_eq!(response.total, 1);
+        assert_eq!(response.messages.len(), 1);
+        assert_eq!(response.messages[0].id, second_id);
+        assert_eq!(response.messages[0].content, "second");
+    }
+
+    #[tokio::test]
+    async fn exposes_system_packages_route() {
+        let response = build_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/system/packages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert!(payload["packages"].is_array());
+        assert_eq!(payload["is_dev"], false);
+        assert_eq!(payload["cms_enabled"], false);
+    }
+
+    #[tokio::test]
     async fn lists_workflow_runs_after_starting_a_workflow_with_official_field_names() {
         let registry = RuntimeRegistry::new();
         registry.register_workflow(JsonWorkflow);
@@ -2072,6 +2938,7 @@ mod tests {
             .unwrap();
         let list_payload: Value = serde_json::from_slice(&list_body).unwrap();
         assert_eq!(list_payload["runs"].as_array().unwrap().len(), 1);
+        assert_eq!(list_payload["total"], 1);
         assert_eq!(list_payload["runs"][0]["workflow_id"], "demo");
         assert_eq!(list_payload["runs"][0]["resource_id"], "resource-9");
         assert_eq!(list_payload["runs"][0]["status"], "success");

@@ -381,6 +381,12 @@ impl Agent {
             .list_messages(MemoryRecallRequest {
                 thread_id: thread_id.clone(),
                 limit: self.memory_config.last_messages,
+                resource_id: None,
+                page: None,
+                per_page: None,
+                message_ids: None,
+                start_date: None,
+                end_date: None,
             })
             .await?
             .into_iter()
@@ -665,6 +671,12 @@ mod tests {
             .list_messages(MemoryRecallRequest {
                 thread_id,
                 limit: None,
+                resource_id: None,
+                page: None,
+                per_page: None,
+                message_ids: None,
+                start_date: None,
+                end_date: None,
             })
             .await
             .expect("messages should be persisted");
@@ -900,6 +912,12 @@ mod tests {
             .list_messages(MemoryRecallRequest {
                 thread_id: "thread-tool-memory".into(),
                 limit: None,
+                resource_id: None,
+                page: None,
+                per_page: None,
+                message_ids: None,
+                start_date: None,
+                end_date: None,
             })
             .await
             .expect("messages should be persisted");

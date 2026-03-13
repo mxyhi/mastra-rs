@@ -80,6 +80,10 @@ pub struct CloneThreadRequest {
     pub resource_id: Option<String>,
     pub title: Option<String>,
     pub metadata: Option<Value>,
+    pub message_limit: Option<usize>,
+    pub message_ids: Option<Vec<Uuid>>,
+    pub start_date: Option<DateTime<Utc>>,
+    pub end_date: Option<DateTime<Utc>>,
 }
 
 impl CloneThreadRequest {
@@ -90,6 +94,10 @@ impl CloneThreadRequest {
             resource_id: None,
             title: None,
             metadata: None,
+            message_limit: None,
+            message_ids: None,
+            start_date: None,
+            end_date: None,
         }
     }
 
@@ -110,6 +118,26 @@ impl CloneThreadRequest {
 
     pub fn with_metadata(mut self, metadata: Value) -> Self {
         self.metadata = Some(metadata);
+        self
+    }
+
+    pub fn with_message_limit(mut self, message_limit: usize) -> Self {
+        self.message_limit = Some(message_limit);
+        self
+    }
+
+    pub fn with_message_ids(mut self, message_ids: Vec<Uuid>) -> Self {
+        self.message_ids = Some(message_ids);
+        self
+    }
+
+    pub fn starting_from(mut self, start_date: DateTime<Utc>) -> Self {
+        self.start_date = Some(start_date);
+        self
+    }
+
+    pub fn ending_at(mut self, end_date: DateTime<Utc>) -> Self {
+        self.end_date = Some(end_date);
         self
     }
 }

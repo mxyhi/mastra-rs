@@ -461,6 +461,12 @@ mod tests {
             .list_messages(MemoryRecallRequest {
                 thread_id: "thread-stream".into(),
                 limit: None,
+                resource_id: None,
+                page: None,
+                per_page: None,
+                message_ids: None,
+                start_date: None,
+                end_date: None,
             })
             .await
             .expect("stream should persist memory")
