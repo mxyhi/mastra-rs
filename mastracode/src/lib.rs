@@ -245,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn ready_message_points_to_extended_headless_flags() {
+    fn ready_message_points_to_official_continue_flag() {
         assert!(ready_message().contains("--continue"));
         assert!(ready_message().contains("--format json"));
     }

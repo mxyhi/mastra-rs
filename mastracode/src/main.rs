@@ -11,12 +11,19 @@ struct Cli {
     command: Option<Command>,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum Command {
     Run {
         #[arg(long, short = 'p')]
         prompt: String,
-        #[arg(long, short = 'c', default_value_t = false)]
+        // Upstream headless mode uses `--continue` / `-c`; keep `--continue-latest`
+        // as a compatibility alias for the Rust port's earlier wording.
+        #[arg(
+            long = "continue",
+            visible_alias = "continue-latest",
+            short = 'c',
+            default_value_t = false
+        )]
         continue_latest: bool,
         #[arg(long)]
         thread_id: Option<String>,
@@ -106,6 +113,45 @@ async fn main() -> ExitCode {
         None => {
             println!("{}", ready_message());
             ExitCode::SUCCESS
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::{Cli, Command};
+
+    #[test]
+    fn run_command_accepts_official_continue_flag() {
+        let cli = Cli::try_parse_from(["mastracode", "run", "--prompt", "hello", "--continue"])
+            .expect("run command should parse");
+
+        match cli.command {
+            Some(Command::Run {
+                continue_latest, ..
+            }) => assert!(continue_latest),
+            other => panic!("expected run command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_command_keeps_continue_latest_as_compatibility_alias() {
+        let cli = Cli::try_parse_from([
+            "mastracode",
+            "run",
+            "--prompt",
+            "hello",
+            "--continue-latest",
+        ])
+        .expect("run command should parse");
+
+        match cli.command {
+            Some(Command::Run {
+                continue_latest, ..
+            }) => assert!(continue_latest),
+            other => panic!("expected run command, got {other:?}"),
         }
     }
 }
