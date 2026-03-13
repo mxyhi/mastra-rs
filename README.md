@@ -33,6 +33,13 @@ Generate a starter app:
 cargo run -p create-mastra -- new ./demo-app
 ```
 
+Or scaffold through the Rust CLI wrapper:
+
+```bash
+cargo run -p mastra-cli -- create demo-app --dir .
+cargo run -p mastra-cli -- init --dir ./existing-app
+```
+
 Inspect the current server route surface:
 
 ```bash
@@ -42,8 +49,23 @@ cargo run -p mastra-cli -- routes
 Run the headless MastraCode subset:
 
 ```bash
-cargo run -p mastracode -- run --prompt "hello rust" --continue --format json
+cargo run -p mastracode -- run --prompt "hello rust" --continue-latest --format json
 ```
+
+## CLI Status
+
+Current Rust CLI behavior is intentionally narrower than the upstream TypeScript CLI:
+
+- `create` creates a new Rust starter under `<dir>/<project-name>` and defaults the project name to `mastra-app`
+- `init` writes the same starter into an existing directory and aborts if `Cargo.toml` or `src/main.rs` already exists
+- `routes` prints the current `mastra-server` route catalog
+- `dev` and `start` bind an HTTP server on `127.0.0.1:4111` by default
+
+Current parity gaps that are documented on purpose:
+
+- `dev` parses `--dir`, `--env`, and `--debug`, but the current Rust implementation still serves `MastraHttpServer::new()` instead of loading a project graph from disk
+- `start` parses `--dir` and `--env`, but does not yet boot from built `.mastra/output` artifacts
+- upstream commands such as `build`, `studio`, `lint`, `scorers`, and `migrate` are not implemented yet
 
 ## Workspace Entry Points
 

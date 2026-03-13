@@ -23,6 +23,16 @@ Then inspect:
 curl http://127.0.0.1:4111/api/routes
 ```
 
+## CLI Touchpoints
+
+`mastra-cli` currently wraps this crate for:
+
+- `mastra-cli dev`
+- `mastra-cli start`
+- `mastra-cli routes`
+
+At the moment, `dev` and `start` both boot the same `MastraHttpServer` wrapper and do not yet load a project graph from `src/mastra` or built output from `.mastra/output`. The docs call this out explicitly so the CLI documentation stays aligned with the real runtime.
+
 ## Agent Execution Compatibility
 
 - accepts camelCase generate/stream wire fields such as `runId`, `maxSteps`, `requestContext`, `activeTools`, and `toolChoice`
