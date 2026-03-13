@@ -1,11 +1,15 @@
 # mastra-memory
 
-Thread and message management for the Rust Mastra subset.
+Thread, message, working-memory, and observation storage for the current Rust Mastra subset.
 
 ## Included Today
 
 - create, get, update, list, clone, and delete threads
 - append, list, and delete messages
+- get and update working memory in thread or resource scope
+- append and list observations, including `observed_message_ids`
+- new threads inherit resource-scoped working memory for the same resource
+- cloned threads copy working memory and remap observation message ids
 - pagination and ordering support
 - bridge to storage backends that implement the memory store trait
 
@@ -16,4 +20,14 @@ Thread and message management for the Rust Mastra subset.
 
 ## Notes
 
-Current parity work in this crate is focused on durable thread/message history. Working memory and observational memory remain outside the current subset.
+Current memory parity in this crate is a manual data-plane subset:
+
+- it stores and retrieves working memory state
+- it stores and paginates observations
+- it mirrors those records through the `mastra-core` memory-engine bridge
+
+Still outside the current subset:
+
+- semantic recall or vector search
+- upstream automatic working-memory update tooling
+- upstream observer/reflector background processors and buffering

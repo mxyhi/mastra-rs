@@ -6,6 +6,13 @@ Current Rust MastraCode subset:
 cargo run -p mastracode -- run --prompt "hello rust" --continue --format json
 ```
 
+## Entry Point Difference
+
+This repository only implements the headless `run --prompt ...` path. That is
+deliberately narrower than upstream MastraCode, which defaults to an
+interactive TUI and also supports top-level headless entry via
+`mastracode --prompt ...`.
+
 ## Flags
 
 - `--prompt <text>`
@@ -34,6 +41,10 @@ Today it still runs a fixed echo model through `StaticModel::echo()` and does no
 - interactive TUI flows
 - slash commands
 - OAuth or editor integrations
+
+Examples and reference snippets in this Rust workspace intentionally keep using
+`cargo run -p mastracode -- run --prompt ...` so they match the implemented
+entry point instead of the upstream product UX.
 
 ## Pending Alignment Notes
 

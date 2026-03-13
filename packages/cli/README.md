@@ -57,7 +57,7 @@ cargo run -p mastra-cli -- scorers list
 
 - `create` creates `<dir>/<project-name>` through the local `create-mastra` crate
 - `init` writes the same starter into an existing directory and fails fast if a Rust starter is already present
-- `lint` validates ids and references in either the local single-file manifest or the `create-mastra` graph manifest
+- `lint` validates ids and references in either the local single-file manifest or the supported `create-mastra` graph subset
 - `dev` loads a project graph from disk, registers it into a real `MastraHttpServer`, and serves it
 - `build` writes `.mastra/output/bundle.json` plus `routes.txt`, with an optional static Studio shell
 - `start` boots the same runtime from the built bundle under `.mastra/output`
@@ -65,6 +65,20 @@ cargo run -p mastra-cli -- scorers list
 - `migrate` initializes each `libsql` memory declared in the manifest
 - `scorers` lists built-in templates or writes a scorer stub into `src/mastra/scorers`
 - `routes` prints `mastra-server` route descriptions
+
+## Graph Boundary
+
+`create/init/lint/dev/build/start` do not execute the full upstream graph
+format. The current Rust loader only consumes:
+
+- `app_name`
+- path-referenced `memories/tools/agents/workflows`
+- agent `instructions|instructions_path`
+- model kinds `echo|prefixed_echo`
+- workflow step kinds `identity|static_json|tool|agent`
+
+Generated starter metadata such as `entrypoint`, `mastra_dir`, and `resources`
+is preserved on disk but ignored by the current runtime.
 
 ## Current Boundary
 

@@ -37,6 +37,20 @@ The starter deliberately stays inside the subset already implemented by this wor
 - `mastra.json` as a `schema_version` project graph manifest with per-node path references
 - one default memory, one sum tool, one echo agent, and one static_json workflow
 
+## CLI-Consumed Graph Subset
+
+The generated `schema_version` graph is intentionally larger than what the Rust
+CLI currently executes. Today `mastra lint/dev/build/start` only consumes:
+
+- top-level `app_name`
+- `memories/tools/agents/workflows` entries shaped as `{ id, path }`
+- agent `instructions` or `instructions_path`
+- model kinds `echo` and `prefixed_echo`
+- workflow step kinds `identity`, `static_json`, `tool`, and `agent`
+
+Generated metadata such as `entrypoint`, `mastra_dir`, and `resources` is kept
+for starter parity, but the Rust CLI/runtime does not execute those fields yet.
+
 ## Current Boundary
 
 This is a single built-in starter generator, not the full upstream template catalog.

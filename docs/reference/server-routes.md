@@ -35,11 +35,31 @@ Current public route surface implemented by `mastra-server`.
 - `GET /api/memory/threads/{thread_id}`
 - `PATCH /api/memory/threads/{thread_id}`
 - `DELETE /api/memory/threads/{thread_id}`
+- `GET /api/memory/threads/{thread_id}/working-memory`
+- `PUT /api/memory/threads/{thread_id}/working-memory`
+- `GET /api/memory/threads/{thread_id}/observations`
+- `POST /api/memory/threads/{thread_id}/observations`
 - `POST /api/memory/threads/{thread_id}/clone`
 - `GET /api/memory/threads/{thread_id}/messages`
 - `POST /api/memory/threads/{thread_id}/messages`
 - `POST /api/memory/messages/delete`
 - named-memory equivalents under `/api/memory/{memory_id}/...`
+
+### Working Memory Request Notes
+
+- `GET .../working-memory` returns `{ working_memory: Option<WorkingMemoryState> }`
+- `PUT .../working-memory` accepts `resourceId`, optional `scope`, optional `format`, optional `template`, and required `content`
+- `scope` defaults to `thread`
+- omitted `format` is inferred from `content`: strings become markdown, non-strings become JSON
+- resource-scoped writes require `resourceId` if the state should be shared across threads for the same resource
+
+### Observation Request And Query Notes
+
+- `GET .../observations` accepts `page`, `perPage`, optional `resourceId`, and optional `scope`
+- `POST .../observations` accepts `resourceId`, optional `scope`, `content`, `observedMessageIds`, and free-form `metadata`
+- `scope` defaults to `thread`
+- list responses return `observations`, `total`, `page`, `per_page`, and `has_more`
+- this is a manual API surface for persisted observations, not the upstream automatic observer/reflector pipeline
 
 ## Workflows
 
@@ -77,6 +97,8 @@ Current public route surface implemented by `mastra-server`.
 These upstream route families are still structural gaps in the Rust port:
 
 - workflow time-travel
+- semantic recall / vector-backed memory
+- automatic working-memory / observational-memory processors
 - vectors
 - logs
 - telemetry

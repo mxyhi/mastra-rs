@@ -41,7 +41,89 @@ let thread_client = client.get_memory_thread(thread.thread.id.clone());
 - list threads with pagination and ordering
 - create, fetch, update, clone, and delete threads
 - append, list, and delete messages
+- get and update working memory
+- list and append observations
 - top-level default-memory helpers
+
+### Working Memory And Observation Methods
+
+Current Rust client parity matches the current Rust server routes, not the
+larger upstream TypeScript client shape.
+
+Top-level named/default memory helpers:
+
+- `MemoryClient::get_working_memory(thread_id)`
+- `MemoryClient::update_working_memory(thread_id, request)`
+- `MemoryClient::observations(thread_id)`
+- `MemoryClient::observations_with_query(thread_id, query)`
+- `MemoryClient::append_observation(thread_id, request)`
+
+Per-thread helpers:
+
+- `MemoryThreadClient::get_working_memory()`
+- `MemoryThreadClient::update_working_memory(request)`
+- `MemoryThreadClient::observations()`
+- `MemoryThreadClient::observations_with_query(query)`
+- `MemoryThreadClient::append_observation(request)`
+
+Example:
+
+```rust
+use mastra_client_sdks_client_js::{
+    AppendObservationInput, ListObservationsQuery, MastraClient, UpdateWorkingMemoryInput,
+};
+use mastra_core::MemoryScope;
+use serde_json::json;
+
+let client = MastraClient::new("http://127.0.0.1:4111")?;
+let memory = client.memory("chat");
+
+let updated = memory
+    .update_working_memory(
+        "thread-1",
+        UpdateWorkingMemoryInput {
+            resource_id: Some("user-123".to_owned()),
+            scope: Some(MemoryScope::Resource),
+            format: None,
+            template: None,
+            content: json!("# User Profile\n- Name: Ada\n- Preferences: rust, cli\n"),
+        },
+    )
+    .await?;
+
+let observations = memory
+    .observations_with_query(
+        "thread-1",
+        ListObservationsQuery {
+            page: Some(0),
+            per_page: Some("20".to_owned()),
+            resource_id: Some("user-123".to_owned()),
+            scope: Some(MemoryScope::Resource),
+        },
+    )
+    .await?;
+
+let appended = memory
+    .append_observation(
+        "thread-1",
+        AppendObservationInput {
+            resource_id: Some("user-123".to_owned()),
+            scope: Some(MemoryScope::Resource),
+            content: "User prefers concise Rust examples.".to_owned(),
+            observed_message_ids: Vec::new(),
+            metadata: json!({"source": "manual"}),
+        },
+    )
+    .await?;
+# let _ = (updated, observations, appended);
+# Ok::<(), mastra_client_sdks_client_js::MastraClientError>(())
+```
+
+Notes:
+
+- working-memory `format` is optional; the server infers markdown for string content and JSON for structured content
+- observations use the same `page/perPage/resourceId/scope` query shape as the Rust server contract, with `perPage` encoded as a string query value
+- this is a manual read/write API slice; automatic working-memory tools and observational-memory processors are still out of scope
 
 ## Agent Generate / Stream Request Shape
 
@@ -60,7 +142,7 @@ The Rust client now shares the server contract types for `GenerateMemoryConfig` 
 
 ## Not Yet Implemented
 
-- working memory APIs
-- observational memory APIs
+- semantic recall clients
+- automatic working-memory or observational-memory processors
 - vectors, logs, and telemetry clients
 - full upstream structured-output/runtime-processor semantics

@@ -54,6 +54,21 @@ Generated graph assets currently include:
 - one echo agent whose instructions live in `demo-agent.md`
 - one workflow with `static_json` and `tool` steps
 
+## Current Graph Subset Consumed By Rust CLI
+
+The generated `schema_version` graph intentionally looks broader than the
+runtime that consumes it. Today the Rust `mastra-cli` line only executes:
+
+- top-level `app_name`
+- `memories/tools/agents/workflows` arrays of `{ id, path }`
+- agent `instructions` or `instructions_path`
+- model kinds `echo` and `prefixed_echo`
+- workflow step kinds `identity`, `static_json`, `tool`, and `agent`
+
+Generated metadata such as `entrypoint`, `mastra_dir`, and `resources` is
+preserved so the starter layout resembles upstream graph projects, but those
+fields are not executed by the Rust loader/runtime yet.
+
 ## CLI Compatibility
 
 The generated starter is intentionally aligned with the current Rust CLI subset:

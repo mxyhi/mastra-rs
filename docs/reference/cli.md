@@ -69,9 +69,20 @@ cargo run -p mastra-cli -- lint --root ./demo-app --dir src/mastra
 Current behavior:
 
 - loads `src/mastra/mastra.json`
-- accepts both the local single-file manifest and the `create-mastra` graph manifest with `schema_version`
+- accepts both the local single-file manifest and the supported `create-mastra` graph subset with `schema_version`
 - validates duplicate ids plus agent/workflow references
 - reports a short project summary
+
+Current graph subset:
+
+- `app_name`
+- path-referenced `memories/tools/agents/workflows`
+- agent `instructions|instructions_path`
+- model kinds `echo|prefixed_echo`
+- workflow step kinds `identity|static_json|tool|agent`
+
+Generated starter metadata such as `entrypoint`, `mastra_dir`, and `resources`
+is ignored by the Rust loader/runtime today.
 
 ### `dev`
 
@@ -186,6 +197,7 @@ Current behavior:
 - supports `--prompt -` to read stdin
 - supports `--format default|json`
 - supports `--timeout <seconds>` and exits with code `2` on timeout
+- uses `run --prompt ...` as the implemented headless entry, not the upstream top-level `--prompt` or default TUI flow
 
 See [mastracode](./mastracode.md) for details.
 
@@ -197,3 +209,5 @@ The Rust CLI now exposes the major command names, but several commands are inten
 - `studio` is a static shell, not the full Studio product
 - `migrate` only initializes `libsql` memories
 - `scorers` ships a tiny built-in template set
+- `create/init/lint/dev/build/start` only execute the current starter graph subset
+- `mastracode` is still a headless `run --prompt` subset without the upstream TUI, OAuth, or provider/model setup surface

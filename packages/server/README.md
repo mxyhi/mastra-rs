@@ -6,7 +6,7 @@ Axum-based HTTP surface for the current Rust Mastra runtime.
 
 - agents
 - tools
-- memory
+- memory threads/messages, working memory, and observations
 - workflows
 - system packages
 - health and route catalog
@@ -53,6 +53,7 @@ This is still a simplified Rust port: the CLI path now loads project graphs end 
 This crate does not yet provide the larger upstream control plane:
 
 - workflow time-travel
+- semantic recall
 - vector routes
 - logs routes
 - telemetry routes
@@ -70,3 +71,20 @@ The Rust server now exposes the main upstream workflow lifecycle routes:
 Current resume semantics are intentionally simple: the server restarts the
 stored run with `resumeData` as the new `inputData` payload when provided,
 otherwise it reuses the last persisted `input_data`.
+
+## Working Memory And Observations
+
+The current Rust server now exposes manual memory state endpoints for both the
+default memory and named memories:
+
+- `GET/PUT /api/memory/threads/{thread_id}/working-memory`
+- `GET/PUT /api/memory/{memory_id}/threads/{thread_id}/working-memory`
+- `GET/POST /api/memory/threads/{thread_id}/observations`
+- `GET/POST /api/memory/{memory_id}/threads/{thread_id}/observations`
+
+Current behavior:
+
+- `scope` defaults to `thread` for both updates and observation writes
+- `resourceId` can be supplied to read or write resource-scoped state
+- omitted working-memory `format` is inferred from `content`: strings become markdown, non-strings become JSON
+- this is still a manual API surface, not the upstream automatic working-memory / observational-memory processor pipeline
