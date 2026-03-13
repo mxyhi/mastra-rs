@@ -230,6 +230,10 @@ impl MastraClient {
         }
     }
 
+    pub fn get_agent(&self, agent_id: impl Into<String>) -> AgentClient {
+        self.agent(agent_id)
+    }
+
     pub fn tools(&self) -> ToolsClient {
         ToolsClient {
             inner: Arc::clone(&self.inner),
@@ -241,6 +245,10 @@ impl MastraClient {
             inner: Arc::clone(&self.inner),
             tool_id: tool_id.into(),
         }
+    }
+
+    pub fn get_tool(&self, tool_id: impl Into<String>) -> ToolClient {
+        self.tool(tool_id)
     }
 
     pub fn workflows(&self) -> WorkflowsClient {
@@ -256,6 +264,10 @@ impl MastraClient {
         }
     }
 
+    pub fn get_workflow(&self, workflow_id: impl Into<String>) -> WorkflowClient {
+        self.workflow(workflow_id)
+    }
+
     pub fn memories(&self) -> MemoriesClient {
         MemoriesClient {
             inner: Arc::clone(&self.inner),
@@ -269,11 +281,45 @@ impl MastraClient {
         }
     }
 
+    pub fn get_memory(&self, memory_id: impl Into<String>) -> MemoryClient {
+        self.memory(memory_id)
+    }
+
     pub fn default_memory(&self) -> MemoryClient {
         MemoryClient {
             inner: Arc::clone(&self.inner),
             memory_id: None,
         }
+    }
+
+    pub async fn list_agents(&self) -> Result<ListAgentsResponse, MastraClientError> {
+        self.agents().list().await
+    }
+
+    pub async fn list_workflows(&self) -> Result<ListWorkflowsResponse, MastraClientError> {
+        self.workflows().list().await
+    }
+
+    pub async fn list_memories(&self) -> Result<ListMemoriesResponse, MastraClientError> {
+        self.memories().list().await
+    }
+
+    pub async fn list_memory_threads(
+        &self,
+        query: ListThreadsQuery,
+    ) -> Result<ListThreadsResponse, MastraClientError> {
+        self.default_memory().threads_with_query(query).await
+    }
+
+    pub async fn create_memory_thread(
+        &self,
+        request: CreateMemoryThreadRequest,
+    ) -> Result<CreateMemoryThreadResponse, MastraClientError> {
+        self.default_memory().create_thread(request).await
+    }
+
+    pub fn get_memory_thread(&self, thread_id: impl Into<String>) -> MemoryThreadClient {
+        self.default_memory().thread(thread_id)
     }
 
     pub async fn system_packages(&self) -> Result<SystemPackagesResponse, MastraClientError> {

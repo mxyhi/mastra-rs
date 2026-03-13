@@ -630,4 +630,74 @@ mod tests {
         assert_eq!(default_messages.messages[0].content, "default hello");
         assert_eq!(default_messages.messages[1].content, "default reply");
     }
+
+    #[tokio::test]
+    async fn supports_top_level_collection_and_default_memory_convenience_methods() {
+        let harness = TestHarness::spawn().await;
+        let client = MastraClientBuilder::new(harness.base_url.clone())
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap();
+
+        let agents = client.list_agents().await.unwrap();
+        assert_eq!(agents.agents.len(), 1);
+        assert_eq!(
+            client.get_agent("echo").details().await.unwrap().agent.id,
+            "echo"
+        );
+
+        let workflows = client.list_workflows().await.unwrap();
+        assert_eq!(workflows.workflows.len(), 1);
+        assert_eq!(
+            client
+                .get_workflow("demo")
+                .details()
+                .await
+                .unwrap()
+                .workflow
+                .id,
+            "demo"
+        );
+
+        let memories = client.list_memories().await.unwrap();
+        assert!(
+            memories
+                .memories
+                .iter()
+                .any(|memory| memory.id == "default")
+        );
+        assert!(memories.memories.iter().any(|memory| memory.id == "chat"));
+
+        let created = client
+            .create_memory_thread(CreateMemoryThreadRequest {
+                id: None,
+                resource_id: Some("resource-top-level".to_owned()),
+                title: Some("Top-level memory thread".to_owned()),
+                metadata: json!({"scope": "default"}),
+            })
+            .await
+            .unwrap()
+            .thread;
+
+        let listed = client
+            .list_memory_threads(ListThreadsQuery {
+                page: Some(0),
+                per_page: Some(PaginationSizeValue::Number(10)),
+                resource_id: Some("resource-top-level".to_owned()),
+                metadata: None,
+                order_by: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(listed.total, 1);
+        assert_eq!(listed.threads[0].id, created.id);
+
+        let fetched = client
+            .get_memory_thread(created.id.clone())
+            .get()
+            .await
+            .unwrap();
+        assert_eq!(fetched.id, created.id);
+        assert_eq!(fetched.title.as_deref(), Some("Top-level memory thread"));
+    }
 }
