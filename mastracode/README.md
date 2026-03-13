@@ -5,13 +5,13 @@ Persistent headless MastraCode subset for the Rust workspace.
 ## Usage
 
 ```bash
-cargo run -p mastracode -- run --prompt "hello rust" --continue --format json
+cargo run -p mastracode -- --prompt "hello rust" --continue --format json
 ```
 
 Read prompt text from stdin:
 
 ```bash
-printf 'summarize this repo' | cargo run -p mastracode -- run --prompt - --timeout 5
+printf 'summarize this repo' | cargo run -p mastracode -- --prompt - --timeout 5
 ```
 
 ## Included Today
@@ -28,6 +28,7 @@ printf 'summarize this repo' | cargo run -p mastracode -- run --prompt - --timeo
 - `--thread-id` pins an explicit thread instead of looking up the latest one
 - `--resource-id` is forwarded into request context and persisted output
 - `--continue-latest` is still accepted as a compatibility alias for older Rust-port docs
+- `run --prompt ...` is still accepted as a compatibility entry shape
 
 ## Current Boundary
 
@@ -35,8 +36,9 @@ This crate is a headless runner. It is not yet the upstream interactive TUI prod
 
 Compared with upstream Mastra Code today:
 
-- upstream headless mode uses `--continue`, not `--continue-latest`
+- top-level headless mode now matches upstream `--prompt` entry
+- `--continue-latest` remains an extra compatibility alias for older Rust-port docs
 - upstream TUI/headless stack supports model packs, custom OpenAI-compatible providers, OAuth, and API-key-based model routing
 - this Rust port does not yet consume `.mastracode` config files or provider API keys for model resolution
 - this Rust port does not yet implement the upstream project-scoped thread registry or app-data auth/settings/plans/config files
-- `run` still executes through a fixed `StaticModel::echo()` backend
+- the implemented headless path still executes through a fixed `StaticModel::echo()` backend

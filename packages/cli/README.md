@@ -22,11 +22,11 @@ cargo run -p mastra-cli -- routes
 ```
 
 ```bash
-cargo run -p mastra-cli -- create demo-app --dir .
+cargo run -p mastra-cli -- create demo-app --dir . --default --llm openai
 ```
 
 ```bash
-cargo run -p mastra-cli -- init --dir ./demo-app
+cargo run -p mastra-cli -- init --dir ./demo-app --components agents,tools --no-example
 ```
 
 ```bash
@@ -56,7 +56,9 @@ cargo run -p mastra-cli -- scorers list
 ## Current Behavior
 
 - `create` creates `<dir>/<project-name>` through the local `create-mastra` crate
+- `create` also accepts upstream-style scaffold flags: `--default`, `--components`, `--llm`, `--llm-api-key`, `--example`, `--no-example`, `--mcp`, and `--template`
 - `init` writes the same starter into an existing directory and fails fast if a Rust starter is already present
+- `init` accepts the same scaffold flags as `create` except project naming
 - `lint` validates ids and references in either the local single-file manifest or the supported `create-mastra` graph subset
 - `dev` loads a project graph from disk, registers it into a real `MastraHttpServer`, and serves it
 - `build` writes `.mastra/output/bundle.json` plus `routes.txt`, with an optional static Studio shell
@@ -77,8 +79,9 @@ format. The current Rust loader only consumes:
 - model kinds `echo|prefixed_echo`
 - workflow step kinds `identity|static_json|tool|agent`
 
-Generated starter metadata such as `entrypoint`, `mastra_dir`, and `resources`
-is preserved on disk but ignored by the current runtime.
+Generated starter metadata such as `entrypoint`, `mastra_dir`, `resources`,
+provider hint, template hint, MCP target, and selected components is preserved
+on disk but ignored by the current runtime.
 
 ## Current Boundary
 

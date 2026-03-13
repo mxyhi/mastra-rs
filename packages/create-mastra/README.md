@@ -5,12 +5,19 @@ Scaffold a manifest-driven Rust Mastra starter against the local workspace crate
 ## Usage
 
 ```bash
-cargo run -p create-mastra -- new ./demo-app
+cargo run -p create-mastra -- demo-app --default --llm openai
 ```
 
-`create-mastra` currently exposes only one command shape:
+`create-mastra` now supports the upstream-style root invocation surface:
 
-- `new <PATH>`
+- `[project-name]` or `--project-name`
+- `--default`
+- `--components agents,tools,workflows,scorers`
+- `--llm <provider>` / `--llm-api-key <key>`
+- `--example` / `--no-example`
+- `--dir <path>` for the generated `mastra_dir`
+- `--mcp <editor>`
+- `--template <name>`
 
 ## Generated Files
 
@@ -23,6 +30,7 @@ cargo run -p create-mastra -- new ./demo-app
 - `src/mastra/agents/demo-agent.md`
 - `src/mastra/workflows/demo-workflow.json`
 - `src/mastra/resources/hello.txt`
+- `src/mastra/scorers/answer-relevancy.rs` when `scorers` is selected
 - `README.md`
 - `.env.example`
 
@@ -50,6 +58,8 @@ CLI currently executes. Today `mastra lint/dev/build/start` only consumes:
 
 Generated metadata such as `entrypoint`, `mastra_dir`, and `resources` is kept
 for starter parity, but the Rust CLI/runtime does not execute those fields yet.
+The generated manifest now also records starter metadata for provider hint,
+template hint, MCP target, example toggle, and selected components.
 
 ## Current Boundary
 
@@ -59,6 +69,6 @@ It is now shaped so `mastra lint/dev/build/start` can consume a non-empty projec
 Not implemented yet:
 
 - interactive prompts
-- selectable templates
+- real template materialization beyond metadata
 - GitHub-template sources
-- provider/bootstrap flags such as `--llm` or `--components`
+- dependency installation or package-manager bootstrap

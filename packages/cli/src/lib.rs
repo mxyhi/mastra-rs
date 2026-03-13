@@ -9,7 +9,7 @@ use std::{
 };
 
 use clap::{Args, Parser, Subcommand};
-use create_mastra::{default_repo_root, scaffold};
+use create_mastra::{ScaffoldOptions, default_repo_root, scaffold_with_options};
 use mastra_server::{MastraHttpServer, RouteDescription};
 use project::{
     DEFAULT_BUILD_DIR, DEFAULT_MASTRA_DIR, ProjectSummary, add_scorer, build_project,
@@ -53,12 +53,60 @@ pub struct CreateCommand {
 
     #[arg(long, default_value = DEFAULT_CREATE_DIR)]
     pub dir: PathBuf,
+
+    #[arg(long, default_value_t = false)]
+    pub default: bool,
+
+    #[arg(short = 'c', long)]
+    pub components: Option<String>,
+
+    #[arg(short = 'l', long)]
+    pub llm: Option<String>,
+
+    #[arg(short = 'k', long)]
+    pub llm_api_key: Option<String>,
+
+    #[arg(short = 'e', long, default_value_t = false)]
+    pub example: bool,
+
+    #[arg(short = 'n', long = "no-example", default_value_t = false)]
+    pub no_example: bool,
+
+    #[arg(short = 'm', long)]
+    pub mcp: Option<String>,
+
+    #[arg(long)]
+    pub template: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct InitCommand {
     #[arg(long, default_value = DEFAULT_CREATE_DIR)]
     pub dir: PathBuf,
+
+    #[arg(long, default_value_t = false)]
+    pub default: bool,
+
+    #[arg(short = 'c', long)]
+    pub components: Option<String>,
+
+    #[arg(short = 'l', long)]
+    pub llm: Option<String>,
+
+    #[arg(short = 'k', long)]
+    pub llm_api_key: Option<String>,
+
+    #[arg(short = 'e', long, default_value_t = false)]
+    pub example: bool,
+
+    #[arg(short = 'n', long = "no-example", default_value_t = false)]
+    pub no_example: bool,
+
+    #[arg(short = 'm', long)]
+    pub mcp: Option<String>,
+
+    #[arg(long)]
+    pub template: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -357,6 +405,45 @@ fn normalize_api_prefix(prefix: &str) -> String {
     }
 }
 
+fn build_scaffold_options(
+    project_name: Option<String>,
+    default: bool,
+    components: Option<String>,
+    llm: Option<String>,
+    llm_api_key: Option<String>,
+    example: bool,
+    no_example: bool,
+    mcp: Option<String>,
+    template: Option<String>,
+) -> ScaffoldOptions {
+    let mut options = ScaffoldOptions {
+        project_name,
+        components: components
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|component| !component.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+        llm_provider: llm,
+        llm_api_key,
+        add_example: !no_example,
+        mcp_server: mcp,
+        template,
+        ..Default::default()
+    };
+
+    if example {
+        options.add_example = true;
+    }
+
+    if default {
+        options = options.apply_default_quickstart();
+    }
+
+    options
+}
+
 pub fn scaffold_create_project(
     command: &CreateCommand,
     repo_root: &Path,
@@ -368,7 +455,18 @@ pub fn scaffold_create_project(
         return Err(format!("target directory {} already exists", target.display()).into());
     }
 
-    scaffold(&target, repo_root)?;
+    let options = build_scaffold_options(
+        command.project_name.clone(),
+        command.default,
+        command.components.clone(),
+        command.llm.clone(),
+        command.llm_api_key.clone(),
+        command.example,
+        command.no_example,
+        command.mcp.clone(),
+        command.template.clone(),
+    );
+    scaffold_with_options(&target, repo_root, &options)?;
     Ok(target)
 }
 
@@ -386,7 +484,18 @@ pub fn scaffold_init_project(
         .into());
     }
 
-    scaffold(&target, repo_root)?;
+    let options = build_scaffold_options(
+        None,
+        command.default,
+        command.components.clone(),
+        command.llm.clone(),
+        command.llm_api_key.clone(),
+        command.example,
+        command.no_example,
+        command.mcp.clone(),
+        command.template.clone(),
+    );
+    scaffold_with_options(&target, repo_root, &options)?;
     Ok(target)
 }
 
@@ -604,6 +713,35 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_create_command_with_upstream_scaffold_flags() {
+        let temp = tempdir().expect("tempdir");
+        let cli = Cli::try_parse_from([
+            "mastra",
+            "create",
+            "demo-app",
+            "--default",
+            "--components",
+            "agents,tools,workflows",
+            "--llm",
+            "openai",
+            "--llm-api-key",
+            "test-key",
+            "--example",
+            "--dir",
+            temp.path().to_str().expect("utf8 path"),
+            "--mcp",
+            "vscode",
+            "--template",
+            "template-deep-search",
+        ]);
+
+        assert!(
+            cli.is_ok(),
+            "mastra create should parse upstream-style scaffold flags"
+        );
+    }
+
+    #[test]
     fn scaffold_create_project_writes_starter_files_via_create_mastra() {
         let temp = tempdir().expect("tempdir");
         let repo_root = PathBuf::from("/repo/mastra-rs");
@@ -611,6 +749,14 @@ mod tests {
             &super::CreateCommand {
                 project_name: Some("demo-app".into()),
                 dir: temp.path().to_path_buf(),
+                default: false,
+                components: None,
+                llm: None,
+                llm_api_key: None,
+                example: false,
+                no_example: false,
+                mcp: None,
+                template: None,
             },
             &repo_root,
         )
@@ -637,6 +783,30 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_init_command_with_upstream_scaffold_flags() {
+        let temp = tempdir().expect("tempdir");
+        let cli = Cli::try_parse_from([
+            "mastra",
+            "init",
+            "--default",
+            "--dir",
+            temp.path().to_str().expect("utf8 path"),
+            "--components",
+            "agents,tools",
+            "--llm",
+            "anthropic",
+            "--no-example",
+            "--mcp",
+            "cursor",
+        ]);
+
+        assert!(
+            cli.is_ok(),
+            "mastra init should parse upstream-style scaffold flags"
+        );
+    }
+
+    #[test]
     fn scaffold_init_project_writes_starter_files_in_place() {
         let temp = tempdir().expect("tempdir");
         let repo_root = PathBuf::from("/repo/mastra-rs");
@@ -644,6 +814,14 @@ mod tests {
         let target = scaffold_init_project(
             &super::InitCommand {
                 dir: temp.path().to_path_buf(),
+                default: false,
+                components: None,
+                llm: None,
+                llm_api_key: None,
+                example: false,
+                no_example: false,
+                mcp: None,
+                template: None,
             },
             &repo_root,
         )

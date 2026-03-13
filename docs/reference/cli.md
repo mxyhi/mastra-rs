@@ -34,7 +34,7 @@ Supported commands today:
 Create a new starter project below `--dir`.
 
 ```bash
-cargo run -p mastra-cli -- create demo-app --dir .
+cargo run -p mastra-cli -- create demo-app --dir . --default --llm openai
 ```
 
 Current behavior:
@@ -43,13 +43,15 @@ Current behavior:
 - `project-name` defaults to `mastra-app`
 - fails if the target directory already exists
 - delegates to the local `create-mastra` crate
+- also parses scaffold flags `--default`, `--components`, `--llm`, `--llm-api-key`, `--example`, `--no-example`, `--mcp`, and `--template`
+- forwards those scaffold flags into generated starter metadata, README, `.env.example`, and scorer stub generation
 
 ### `init`
 
 Scaffold the same starter in place.
 
 ```bash
-cargo run -p mastra-cli -- init --dir ./existing-app
+cargo run -p mastra-cli -- init --dir ./existing-app --components agents,tools --no-example
 ```
 
 Current behavior:
@@ -57,6 +59,7 @@ Current behavior:
 - writes starter files into `--dir`
 - fails if `Cargo.toml` or `src/main.rs` already exists
 - does not merge into an existing Rust app
+- parses the same scaffold flags as `create` except project naming
 
 ### `lint`
 
@@ -178,15 +181,15 @@ Current behavior:
 ## `create-mastra`
 
 ```bash
-cargo run -p create-mastra -- new ./demo-app
+cargo run -p create-mastra -- demo-app --default --llm openai
 ```
 
-Generates a starter Rust app plus a graph manifest under `src/mastra/`. See [create-mastra](./create-mastra.md) for the generated file layout.
+Generates a starter Rust app plus a graph manifest under the selected `mastra_dir`. See [create-mastra](./create-mastra.md) for the generated file layout.
 
 ## `mastracode`
 
 ```bash
-cargo run -p mastracode -- run --prompt "hello rust" --continue --format json
+cargo run -p mastracode -- --prompt "hello rust" --continue --format json
 ```
 
 Current behavior:
@@ -197,7 +200,8 @@ Current behavior:
 - supports `--prompt -` to read stdin
 - supports `--format default|json`
 - supports `--timeout <seconds>` and exits with code `2` on timeout
-- uses `run --prompt ...` as the implemented headless entry, not the upstream top-level `--prompt` or default TUI flow
+- also accepts `run --prompt ...` as a compatibility entry shape
+- still does not implement the upstream default TUI flow
 
 See [mastracode](./mastracode.md) for details.
 

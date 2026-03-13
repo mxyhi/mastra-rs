@@ -5,14 +5,15 @@
 ## Usage
 
 ```bash
-cargo run -p create-mastra -- new ./demo-app
+cargo run -p create-mastra -- demo-app --default --llm openai
 ```
 
 Current command surface:
 
-- only subcommand: `new <PATH>`
-- no interactive prompt
-- no template selection flags
+- root invocation accepts `[project-name]` or `--project-name`
+- supported scaffold flags: `--default`, `--components`, `--llm`, `--llm-api-key`, `--example`, `--no-example`, `--dir`, `--mcp`, `--template`
+- still no interactive prompt or package-manager bootstrap
+- `--default` expands to OpenAI + example assets + `agents,tools,workflows,scorers`
 
 ## Generated Files
 
@@ -25,6 +26,7 @@ Current command surface:
 - `src/mastra/agents/demo-agent.md`
 - `src/mastra/workflows/demo-workflow.json`
 - `src/mastra/resources/hello.txt`
+- `src/mastra/scorers/answer-relevancy.rs` when `scorers` is selected
 - `README.md`
 - `.env.example`
 
@@ -46,6 +48,7 @@ Generated `src/main.rs` currently:
 - enables `Memory::in_memory()`
 - executes one sample `agent.generate(...)` call
 - embeds the generated graph assets with `include_str!`
+- rewrites those include paths when `--dir` points somewhere other than `src`
 
 Generated graph assets currently include:
 
@@ -53,6 +56,7 @@ Generated graph assets currently include:
 - one sum tool node
 - one echo agent whose instructions live in `demo-agent.md`
 - one workflow with `static_json` and `tool` steps
+- starter metadata for selected template, MCP target, provider hint, component list, and example toggle
 
 ## Current Graph Subset Consumed By Rust CLI
 
@@ -82,9 +86,10 @@ The generated starter is intentionally aligned with the current Rust CLI subset:
 
 This Rust crate is still much narrower than the upstream JavaScript `create-mastra` flow:
 
-- no template catalog or GitHub template ingestion
-- no `--default`, `--components`, `--llm`, `--llm-api-key`, `--example`, `--mcp`, or `--skills`
-- no package-manager detection or dependency installation
+- `--template` is currently starter metadata, not a full upstream template catalog
+- `--mcp` is currently starter metadata, not editor-side installation
+- no GitHub template ingestion, dependency installation, or package-manager detection
+- generated runtime still uses `StaticModel::echo()` regardless of provider hint
 
 ## Pending Alignment Notes
 

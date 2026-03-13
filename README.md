@@ -31,14 +31,14 @@ cargo test --workspace
 Generate a starter app:
 
 ```bash
-cargo run -p create-mastra -- new ./demo-app
+cargo run -p create-mastra -- demo-app --default --llm openai
 ```
 
 Or scaffold through the Rust CLI wrapper:
 
 ```bash
-cargo run -p mastra-cli -- create demo-app --dir .
-cargo run -p mastra-cli -- init --dir ./existing-app
+cargo run -p mastra-cli -- create demo-app --dir . --default --llm openai
+cargo run -p mastra-cli -- init --dir ./existing-app --components agents,tools --no-example
 ```
 
 Validate and build the generated project graph:
@@ -57,16 +57,17 @@ cargo run -p mastra-cli -- routes
 Run the headless MastraCode subset:
 
 ```bash
-cargo run -p mastracode -- run --prompt "hello rust" --continue --format json
+cargo run -p mastracode -- --prompt "hello rust" --continue --format json
 ```
 
-This Rust port currently exposes headless entry through `mastracode run --prompt ...`. It does not yet match the upstream default TUI entry or the upstream top-level `mastracode --prompt ...` headless flow.
+This Rust port now exposes both `mastracode --prompt ...` and `mastracode run --prompt ...` for headless execution. It still does not match the upstream default TUI entry.
 
 ## CLI Status
 
 Current Rust CLI behavior is intentionally narrower than the upstream TypeScript CLI:
 
 - `create` creates a new Rust starter under `<dir>/<project-name>` and defaults the project name to `mastra-app`
+- `create` and `init` now accept upstream-style scaffold flags for default scaffolding, provider hints, template hints, MCP target metadata, example toggles, and scorer stub generation
 - `init` writes the same starter into an existing directory and aborts if `Cargo.toml` or `src/main.rs` already exists
 - `lint` validates either a single-file manifest or the supported `create-mastra` graph subset
 - `dev` loads the project graph from disk and serves a real `MastraHttpServer`
