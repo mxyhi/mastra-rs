@@ -14,13 +14,15 @@ use uuid::Uuid;
 use crate::{
     MastraClientError,
     types::{
-        AppendMemoryMessagesRequest, AppendMemoryMessagesResponse, CreateMemoryThreadRequest,
-        CreateMemoryThreadResponse, CreateWorkflowRunRequest, DeleteMemoryMessagesRequest,
-        DeleteMemoryMessagesResponse, ErrorResponse, GenerateRequest, GenerateResponse,
-        GenerateStreamEvent, ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse,
-        ListMessagesQuery, ListThreadsQuery, ListThreadsResponse, ListWorkflowRunsResponse,
-        ListWorkflowsResponse, StartWorkflowRunRequest, StartWorkflowRunResponse,
-        SystemPackagesResponse, WorkflowRunRecord, WorkflowStreamEvent,
+        AgentDetailResponse, AppendMemoryMessagesRequest, AppendMemoryMessagesResponse,
+        CreateMemoryThreadRequest, CreateMemoryThreadResponse, CreateWorkflowRunRequest,
+        DeleteMemoryMessagesRequest, DeleteMemoryMessagesResponse, ErrorResponse,
+        ExecuteToolRequest, ExecuteToolResponse, GenerateRequest, GenerateResponse,
+        GenerateStreamEvent, GetMemoryThreadResponse, ListAgentsResponse, ListMemoriesResponse,
+        ListMemoryMessagesResponse, ListMessagesQuery, ListThreadsQuery, ListThreadsResponse,
+        ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse, ListWorkflowsResponse,
+        StartWorkflowRunRequest, StartWorkflowRunResponse, SystemPackagesResponse, ToolSummary,
+        WorkflowDetailResponse, WorkflowRunRecord, WorkflowStreamEvent,
     },
 };
 
@@ -80,6 +82,17 @@ pub struct AgentClient {
 }
 
 #[derive(Debug, Clone)]
+pub struct ToolsClient {
+    inner: Arc<ClientInner>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolClient {
+    inner: Arc<ClientInner>,
+    tool_id: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct WorkflowsClient {
     inner: Arc<ClientInner>,
 }
@@ -98,7 +111,14 @@ pub struct MemoriesClient {
 #[derive(Debug, Clone)]
 pub struct MemoryClient {
     inner: Arc<ClientInner>,
-    memory_id: String,
+    memory_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryThreadClient {
+    inner: Arc<ClientInner>,
+    memory_id: Option<String>,
+    thread_id: String,
 }
 
 impl MastraClientBuilder {
@@ -209,6 +229,19 @@ impl MastraClient {
         }
     }
 
+    pub fn tools(&self) -> ToolsClient {
+        ToolsClient {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+
+    pub fn tool(&self, tool_id: impl Into<String>) -> ToolClient {
+        ToolClient {
+            inner: Arc::clone(&self.inner),
+            tool_id: tool_id.into(),
+        }
+    }
+
     pub fn workflows(&self) -> WorkflowsClient {
         WorkflowsClient {
             inner: Arc::clone(&self.inner),
@@ -231,7 +264,14 @@ impl MastraClient {
     pub fn memory(&self, memory_id: impl Into<String>) -> MemoryClient {
         MemoryClient {
             inner: Arc::clone(&self.inner),
-            memory_id: memory_id.into(),
+            memory_id: Some(memory_id.into()),
+        }
+    }
+
+    pub fn default_memory(&self) -> MemoryClient {
+        MemoryClient {
+            inner: Arc::clone(&self.inner),
+            memory_id: None,
         }
     }
 
@@ -251,6 +291,40 @@ impl AgentsClient {
 }
 
 impl AgentClient {
+    pub async fn details(&self) -> Result<AgentDetailResponse, MastraClientError> {
+        self.inner
+            .request(
+                Method::GET,
+                &format!("/agents/{}", self.agent_id),
+                Option::<&()>::None,
+            )
+            .await
+    }
+
+    pub async fn tools(&self) -> Result<ListToolsResponse, MastraClientError> {
+        self.inner
+            .request(
+                Method::GET,
+                &format!("/agents/{}/tools", self.agent_id),
+                Option::<&()>::None,
+            )
+            .await
+    }
+
+    pub async fn execute_tool(
+        &self,
+        tool_id: &str,
+        request: ExecuteToolRequest,
+    ) -> Result<ExecuteToolResponse, MastraClientError> {
+        self.inner
+            .request(
+                Method::POST,
+                &format!("/agents/{}/tools/{tool_id}/execute", self.agent_id),
+                Some(&request),
+            )
+            .await
+    }
+
     pub async fn generate(
         &self,
         request: GenerateRequest,
@@ -298,6 +372,39 @@ impl AgentClient {
     }
 }
 
+impl ToolsClient {
+    pub async fn list(&self) -> Result<ListToolsResponse, MastraClientError> {
+        self.inner
+            .request(Method::GET, "/tools", Option::<&()>::None)
+            .await
+    }
+}
+
+impl ToolClient {
+    pub async fn details(&self) -> Result<ToolSummary, MastraClientError> {
+        self.inner
+            .request(
+                Method::GET,
+                &format!("/tools/{}", self.tool_id),
+                Option::<&()>::None,
+            )
+            .await
+    }
+
+    pub async fn execute(
+        &self,
+        request: ExecuteToolRequest,
+    ) -> Result<ExecuteToolResponse, MastraClientError> {
+        self.inner
+            .request(
+                Method::POST,
+                &format!("/tools/{}/execute", self.tool_id),
+                Some(&request),
+            )
+            .await
+    }
+}
+
 impl WorkflowsClient {
     pub async fn list(&self) -> Result<ListWorkflowsResponse, MastraClientError> {
         self.inner
@@ -307,6 +414,16 @@ impl WorkflowsClient {
 }
 
 impl WorkflowClient {
+    pub async fn details(&self) -> Result<WorkflowDetailResponse, MastraClientError> {
+        self.inner
+            .request(
+                Method::GET,
+                &format!("/workflows/{}", self.workflow_id),
+                Option::<&()>::None,
+            )
+            .await
+    }
+
     pub async fn create_run(
         &self,
         request: CreateWorkflowRunRequest,
@@ -347,10 +464,18 @@ impl WorkflowClient {
     }
 
     pub async fn runs(&self) -> Result<ListWorkflowRunsResponse, MastraClientError> {
+        self.runs_with_query(ListWorkflowRunsQuery::default()).await
+    }
+
+    pub async fn runs_with_query(
+        &self,
+        query: ListWorkflowRunsQuery,
+    ) -> Result<ListWorkflowRunsResponse, MastraClientError> {
         self.inner
-            .request(
+            .request_with_query(
                 Method::GET,
                 &format!("/workflows/{}/runs", self.workflow_id),
+                Some(&query),
                 Option::<&()>::None,
             )
             .await
@@ -409,6 +534,14 @@ impl MemoriesClient {
 }
 
 impl MemoryClient {
+    pub fn thread(&self, thread_id: impl Into<String>) -> MemoryThreadClient {
+        MemoryThreadClient {
+            inner: Arc::clone(&self.inner),
+            memory_id: self.memory_id.clone(),
+            thread_id: thread_id.into(),
+        }
+    }
+
     pub async fn threads(&self) -> Result<ListThreadsResponse, MastraClientError> {
         self.threads_with_query(ListThreadsQuery::default()).await
     }
@@ -421,7 +554,7 @@ impl MemoryClient {
         self.inner
             .request_with_query(
                 Method::GET,
-                &format!("/memory/{}/threads", self.memory_id),
+                &self.threads_path(),
                 Some(&query),
                 Option::<&()>::None,
             )
@@ -433,11 +566,7 @@ impl MemoryClient {
         request: CreateMemoryThreadRequest,
     ) -> Result<CreateMemoryThreadResponse, MastraClientError> {
         self.inner
-            .request(
-                Method::POST,
-                &format!("/memory/{}/threads", self.memory_id),
-                Some(&request),
-            )
+            .request(Method::POST, &self.threads_path(), Some(&request))
             .await
     }
 
@@ -446,13 +575,7 @@ impl MemoryClient {
         thread_id: &str,
         request: AppendMemoryMessagesRequest,
     ) -> Result<AppendMemoryMessagesResponse, MastraClientError> {
-        self.inner
-            .request(
-                Method::POST,
-                &format!("/memory/{}/threads/{thread_id}/messages", self.memory_id),
-                Some(&request),
-            )
-            .await
+        self.thread(thread_id).append_messages(request).await
     }
 
     pub async fn messages(
@@ -468,14 +591,7 @@ impl MemoryClient {
         thread_id: &str,
         query: ListMessagesQuery,
     ) -> Result<ListMemoryMessagesResponse, MastraClientError> {
-        self.inner
-            .request_with_query(
-                Method::GET,
-                &format!("/memory/{}/threads/{thread_id}/messages", self.memory_id),
-                Some(&query),
-                Option::<&()>::None,
-            )
-            .await
+        self.thread(thread_id).messages_with_query(query).await
     }
 
     pub async fn clone_thread(
@@ -483,23 +599,109 @@ impl MemoryClient {
         thread_id: &str,
         request: crate::CloneMemoryThreadRequest,
     ) -> Result<crate::CloneMemoryThreadResponse, MastraClientError> {
+        self.thread(thread_id).clone(request).await
+    }
+
+    pub async fn delete_thread(&self, thread_id: &str) -> Result<(), MastraClientError> {
+        self.thread(thread_id).delete().await
+    }
+
+    pub async fn delete_messages(
+        &self,
+        request: DeleteMemoryMessagesRequest,
+    ) -> Result<DeleteMemoryMessagesResponse, MastraClientError> {
         self.inner
-            .request(
-                Method::POST,
-                &format!("/memory/{}/threads/{thread_id}/clone", self.memory_id),
-                Some(&request),
+            .request(Method::POST, &self.delete_messages_path(), Some(&request))
+            .await
+    }
+
+    fn base_path(&self) -> String {
+        self.memory_id
+            .as_ref()
+            .map(|memory_id| format!("/memory/{memory_id}"))
+            .unwrap_or_else(|| "/memory".to_owned())
+    }
+
+    fn threads_path(&self) -> String {
+        format!("{}/threads", self.base_path())
+    }
+
+    fn delete_messages_path(&self) -> String {
+        format!("{}/messages/delete", self.base_path())
+    }
+}
+
+impl MemoryThreadClient {
+    fn thread_path(&self) -> String {
+        self.memory_id
+            .as_ref()
+            .map(|memory_id| format!("/memory/{memory_id}/threads/{}", self.thread_id))
+            .unwrap_or_else(|| format!("/memory/threads/{}", self.thread_id))
+    }
+
+    fn messages_path(&self) -> String {
+        format!("{}/messages", self.thread_path())
+    }
+
+    fn clone_path(&self) -> String {
+        format!("{}/clone", self.thread_path())
+    }
+
+    fn delete_messages_path(&self) -> String {
+        self.memory_id
+            .as_ref()
+            .map(|memory_id| format!("/memory/{memory_id}/messages/delete"))
+            .unwrap_or_else(|| "/memory/messages/delete".to_owned())
+    }
+
+    pub async fn get(&self) -> Result<mastra_core::Thread, MastraClientError> {
+        let response: GetMemoryThreadResponse = self
+            .inner
+            .request(Method::GET, &self.thread_path(), Option::<&()>::None)
+            .await?;
+        Ok(response.thread)
+    }
+
+    pub async fn append_messages(
+        &self,
+        request: AppendMemoryMessagesRequest,
+    ) -> Result<AppendMemoryMessagesResponse, MastraClientError> {
+        self.inner
+            .request(Method::POST, &self.messages_path(), Some(&request))
+            .await
+    }
+
+    pub async fn messages(&self) -> Result<ListMemoryMessagesResponse, MastraClientError> {
+        self.messages_with_query(ListMessagesQuery::default()).await
+    }
+
+    pub async fn messages_with_query(
+        &self,
+        query: ListMessagesQuery,
+    ) -> Result<ListMemoryMessagesResponse, MastraClientError> {
+        self.inner
+            .request_with_query(
+                Method::GET,
+                &self.messages_path(),
+                Some(&query),
+                Option::<&()>::None,
             )
             .await
     }
 
-    pub async fn delete_thread(&self, thread_id: &str) -> Result<(), MastraClientError> {
+    pub async fn clone(
+        &self,
+        request: crate::CloneMemoryThreadRequest,
+    ) -> Result<crate::CloneMemoryThreadResponse, MastraClientError> {
+        self.inner
+            .request(Method::POST, &self.clone_path(), Some(&request))
+            .await
+    }
+
+    pub async fn delete(&self) -> Result<(), MastraClientError> {
         let response = self
             .inner
-            .send(
-                Method::DELETE,
-                &format!("/memory/{}/threads/{thread_id}", self.memory_id),
-                None::<&()>,
-            )
+            .send(Method::DELETE, &self.thread_path(), None::<&()>)
             .await?;
         ensure_success(response).await?;
         Ok(())
@@ -510,11 +712,7 @@ impl MemoryClient {
         request: DeleteMemoryMessagesRequest,
     ) -> Result<DeleteMemoryMessagesResponse, MastraClientError> {
         self.inner
-            .request(
-                Method::POST,
-                &format!("/memory/{}/messages/delete", self.memory_id),
-                Some(&request),
-            )
+            .request(Method::POST, &self.delete_messages_path(), Some(&request))
             .await
     }
 }

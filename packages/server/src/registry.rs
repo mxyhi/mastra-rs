@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use chrono::Utc;
 use indexmap::IndexMap;
 use mastra_core::{MemoryEngine, Tool};
 use parking_lot::RwLock;
@@ -7,8 +8,9 @@ use uuid::Uuid;
 
 use crate::{
     contracts::{
-        AgentSummary, CreateWorkflowRunRequest, MemorySummary, StartWorkflowRunRequest,
-        ToolSummary, WorkflowRunRecord, WorkflowRunStatus, WorkflowSummary,
+        AgentSummary, CreateWorkflowRunRequest, ListWorkflowRunsQuery, ListWorkflowRunsResponse,
+        MemorySummary, StartWorkflowRunRequest, ToolSummary, WorkflowRunRecord, WorkflowRunStatus,
+        WorkflowSummary,
     },
     error::{ServerError, ServerResult},
     runtime::{AgentRuntime, WorkflowRuntime},
@@ -175,11 +177,14 @@ impl RuntimeRegistry {
         request: CreateWorkflowRunRequest,
     ) -> ServerResult<WorkflowRunRecord> {
         self.ensure_workflow_exists(workflow_id)?;
+        let now = Utc::now();
 
         let run = WorkflowRunRecord {
             run_id: Uuid::now_v7(),
             workflow_id: workflow_id.to_owned(),
             status: WorkflowRunStatus::Created,
+            created_at: now,
+            updated_at: now,
             resource_id: request.resource_id,
             input_data: request.input_data,
             result: None,
@@ -205,11 +210,14 @@ impl RuntimeRegistry {
         run_id: Uuid,
     ) -> ServerResult<WorkflowRunRecord> {
         self.ensure_workflow_exists(workflow_id)?;
+        let now = Utc::now();
 
         let run = WorkflowRunRecord {
             run_id,
             workflow_id: workflow_id.to_owned(),
             status: WorkflowRunStatus::Running,
+            created_at: now,
+            updated_at: now,
             resource_id: request.resource_id.clone(),
             input_data: request.input_data.clone(),
             result: None,
@@ -232,6 +240,7 @@ impl RuntimeRegistry {
         })?;
 
         record.status = WorkflowRunStatus::Success;
+        record.updated_at = Utc::now();
         record.result = Some(result);
         record.error = None;
         Ok(record.clone())
@@ -252,6 +261,7 @@ impl RuntimeRegistry {
         })?;
 
         record.status = WorkflowRunStatus::Failed;
+        record.updated_at = Utc::now();
         record.error = Some(error.to_string());
         record.result = None;
         Ok(record.clone())
@@ -282,18 +292,55 @@ impl RuntimeRegistry {
         Ok(run)
     }
 
-    pub fn list_workflow_runs(&self, workflow_id: &str) -> ServerResult<Vec<WorkflowRunRecord>> {
+    pub fn list_workflow_runs(
+        &self,
+        workflow_id: &str,
+        query: &ListWorkflowRunsQuery,
+    ) -> ServerResult<ListWorkflowRunsResponse> {
         self.ensure_workflow_exists(workflow_id)?;
+        if matches!(query.per_page, Some(0)) {
+            return Err(ServerError::BadRequest(
+                "perPage must be greater than zero".to_owned(),
+            ));
+        }
 
         let mut runs = self
             .workflow_runs
             .read()
             .values()
             .filter(|run| run.workflow_id == workflow_id)
+            .filter(|run| {
+                query
+                    .resource_id
+                    .as_deref()
+                    .map(|resource_id| run.resource_id.as_deref() == Some(resource_id))
+                    .unwrap_or(true)
+            })
+            .filter(|run| {
+                query
+                    .status
+                    .as_ref()
+                    .map(|status| &run.status == status)
+                    .unwrap_or(true)
+            })
+            .filter(|run| {
+                query
+                    .from_date
+                    .map(|from| run.created_at >= from)
+                    .unwrap_or(true)
+            })
+            .filter(|run| query.to_date.map(|to| run.created_at <= to).unwrap_or(true))
             .cloned()
             .collect::<Vec<_>>();
-        runs.sort_by_key(|run| run.run_id);
-        Ok(runs)
+        runs.sort_by_key(|run| (run.created_at, run.run_id));
+
+        let total = runs.len();
+        let page = query.page.unwrap_or(0);
+        let per_page = query.per_page.unwrap_or_else(|| total.max(1));
+        let start = page.saturating_mul(per_page);
+        let runs = runs.into_iter().skip(start).take(per_page).collect();
+
+        Ok(ListWorkflowRunsResponse { runs, total })
     }
 
     fn ensure_workflow_exists(&self, workflow_id: &str) -> ServerResult<()> {

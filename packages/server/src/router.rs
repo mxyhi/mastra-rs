@@ -25,11 +25,11 @@ use crate::{
         DeleteMemoryMessagesResponse, ErrorResponse, ExecuteToolRequest, ExecuteToolResponse,
         GenerateRequest, GenerateStreamEvent, GetMemoryThreadResponse, ListAgentsResponse,
         ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery, ListThreadsQuery,
-        ListThreadsResponse, ListToolsResponse, ListWorkflowRunsResponse, ListWorkflowsResponse,
-        RouteDescription, StartWorkflowRunRequest, StartWorkflowRunResponse, SystemPackage,
-        SystemPackagesResponse, WorkflowDetailResponse, WorkflowRunRecord, WorkflowStreamEvent,
-        WorkflowStreamFinishEvent, WorkflowStreamQuery, WorkflowStreamStartEvent,
-        WorkflowStreamStepEvent,
+        ListThreadsResponse, ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse,
+        ListWorkflowsResponse, RouteDescription, StartWorkflowRunRequest, StartWorkflowRunResponse,
+        SystemPackage, SystemPackagesResponse, WorkflowDetailResponse, WorkflowRunRecord,
+        WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamQuery,
+        WorkflowStreamStartEvent, WorkflowStreamStepEvent,
     },
     error::{ServerError, ServerResult},
     registry::RuntimeRegistry,
@@ -985,10 +985,11 @@ async fn stream_workflow(
 async fn list_workflow_runs(
     State(state): State<AppState>,
     Path(workflow_id): Path<String>,
+    Query(query): Query<ListWorkflowRunsQuery>,
 ) -> ServerResult<Json<ListWorkflowRunsResponse>> {
-    let runs = state.registry.list_workflow_runs(&workflow_id)?;
-    let total = runs.len();
-    Ok(Json(ListWorkflowRunsResponse { runs, total }))
+    Ok(Json(
+        state.registry.list_workflow_runs(&workflow_id, &query)?,
+    ))
 }
 
 #[instrument(skip(state))]
@@ -1066,6 +1067,7 @@ mod tests {
     };
     use parking_lot::RwLock;
     use serde_json::{Value, json};
+    use tokio::time::{Duration, sleep};
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -2942,5 +2944,98 @@ mod tests {
         assert_eq!(list_payload["runs"][0]["workflow_id"], "demo");
         assert_eq!(list_payload["runs"][0]["resource_id"], "resource-9");
         assert_eq!(list_payload["runs"][0]["status"], "success");
+    }
+
+    #[tokio::test]
+    async fn filters_workflow_runs_with_official_query_parameters() {
+        let registry = RuntimeRegistry::new();
+        registry.register_workflow(JsonWorkflow);
+        let router = MastraServer::new(registry).into_router();
+
+        let started = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/demo/start-async")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-success",
+                            "inputData": { "topic": "rust" },
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(started.status(), StatusCode::OK);
+
+        let cutoff = Utc::now();
+        sleep(Duration::from_millis(5)).await;
+
+        let created = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workflows/demo/create-run")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "resourceId": "resource-created",
+                            "inputData": { "topic": "draft" },
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+
+        let filtered = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/workflows/demo/runs?status=created&resourceId=resource-created&fromDate={}&page=0&perPage=10",
+                        cutoff.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(filtered.status(), StatusCode::OK);
+
+        let filtered_body = to_bytes(filtered.into_body(), usize::MAX).await.unwrap();
+        let filtered_payload: Value = serde_json::from_slice(&filtered_body).unwrap();
+        assert_eq!(filtered_payload["total"], 1);
+        assert_eq!(filtered_payload["runs"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            filtered_payload["runs"][0]["resource_id"],
+            "resource-created"
+        );
+        assert_eq!(filtered_payload["runs"][0]["status"], "created");
+        assert!(filtered_payload["runs"][0]["created_at"].is_string());
+        assert!(filtered_payload["runs"][0]["updated_at"].is_string());
+
+        let paged = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/workflows/demo/runs?page=1&perPage=1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(paged.status(), StatusCode::OK);
+
+        let paged_body = to_bytes(paged.into_body(), usize::MAX).await.unwrap();
+        let paged_payload: Value = serde_json::from_slice(&paged_body).unwrap();
+        assert_eq!(paged_payload["total"], 2);
+        assert_eq!(paged_payload["runs"].as_array().unwrap().len(), 1);
     }
 }

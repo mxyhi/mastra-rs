@@ -4,24 +4,26 @@ mod types;
 
 pub use client::{
     AgentClient, AgentsClient, MastraClient, MastraClientBuilder, MemoriesClient, MemoryClient,
-    WorkflowClient, WorkflowsClient,
+    MemoryThreadClient, ToolClient, ToolsClient, WorkflowClient, WorkflowsClient,
 };
 pub use error::MastraClientError;
 pub use types::{
-    AgentMessages, AgentSummary, AppendMemoryMessagesRequest, AppendMemoryMessagesResponse,
-    ChatMessage, CloneMemoryThreadMessageFilter, CloneMemoryThreadOptions,
-    CloneMemoryThreadRequest, CloneMemoryThreadResponse, CreateMemoryThreadRequest,
-    CreateMemoryThreadResponse, CreateWorkflowRunRequest, DeleteMemoryMessagesInput,
-    DeleteMemoryMessagesRequest, DeleteMemoryMessagesResponse, ErrorResponse, FinishReason,
-    GenerateRequest, GenerateResponse, GenerateStreamEvent, GenerateStreamFinishEvent,
-    GenerateStreamStartEvent, GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent,
-    GenerateStreamToolResultEvent, ListAgentsResponse, ListMemoriesResponse,
-    ListMemoryMessagesResponse, ListMessagesQuery, ListThreadsQuery, ListThreadsResponse,
+    AgentDetail, AgentDetailResponse, AgentMessages, AgentSummary, AppendMemoryMessagesRequest,
+    AppendMemoryMessagesResponse, ChatMessage, CloneMemoryThreadMessageFilter,
+    CloneMemoryThreadOptions, CloneMemoryThreadRequest, CloneMemoryThreadResponse,
+    CreateMemoryThreadRequest, CreateMemoryThreadResponse, CreateWorkflowRunRequest,
+    DeleteMemoryMessagesInput, DeleteMemoryMessagesRequest, DeleteMemoryMessagesResponse,
+    ErrorResponse, ExecuteToolRequest, ExecuteToolResponse, FinishReason, GenerateRequest,
+    GenerateResponse, GenerateStreamEvent, GenerateStreamFinishEvent, GenerateStreamStartEvent,
+    GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent, GenerateStreamToolResultEvent,
+    ListAgentsResponse, ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery,
+    ListThreadsQuery, ListThreadsResponse, ListToolsResponse, ListWorkflowRunsQuery,
     ListWorkflowRunsResponse, ListWorkflowsResponse, MemoryMessageInput, MemoryMessageRole,
     MemorySummary, RouteDescription, StartWorkflowRunRequest, StartWorkflowRunResponse,
-    SystemPackage, SystemPackagesResponse, UsageStats, WorkflowRunRecord, WorkflowRunRef,
-    WorkflowRunStatus, WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamQuery,
-    WorkflowStreamStartEvent, WorkflowStreamStepEvent, WorkflowSummary,
+    SystemPackage, SystemPackagesResponse, ToolSummary, UsageStats, WorkflowDetail,
+    WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunRef, WorkflowRunStatus,
+    WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamQuery, WorkflowStreamStartEvent,
+    WorkflowStreamStepEvent, WorkflowSummary,
 };
 
 #[cfg(test)]
@@ -31,7 +33,8 @@ mod tests {
     use axum::serve;
     use futures::StreamExt;
     use mastra_core::{
-        Agent, AgentConfig, MemoryConfig, ModelRequest, ModelResponse, StaticModel, Step, Workflow,
+        Agent, AgentConfig, MemoryConfig, ModelRequest, ModelResponse, StaticModel, Step, Tool,
+        Workflow,
     };
     use mastra_memory::Memory;
     use mastra_server::{MastraRuntimeRegistry, MastraServer};
@@ -41,9 +44,10 @@ mod tests {
     use super::{
         AgentMessages, AppendMemoryMessagesRequest, CloneMemoryThreadRequest,
         CreateMemoryThreadRequest, CreateWorkflowRunRequest, DeleteMemoryMessagesInput,
-        DeleteMemoryMessagesRequest, GenerateRequest, ListMessagesQuery, ListThreadsQuery,
-        MastraClient, MastraClientBuilder, MastraClientError, MemoryMessageInput,
-        MemoryMessageRole, StartWorkflowRunRequest, WorkflowRunStatus,
+        DeleteMemoryMessagesRequest, ExecuteToolRequest, GenerateRequest, ListMessagesQuery,
+        ListThreadsQuery, ListWorkflowRunsQuery, MastraClient, MastraClientBuilder,
+        MastraClientError, MemoryMessageInput, MemoryMessageRole, StartWorkflowRunRequest,
+        WorkflowRunStatus,
     };
 
     struct TestHarness {
@@ -54,6 +58,12 @@ mod tests {
     impl TestHarness {
         async fn spawn() -> Self {
             let server = MastraServer::new(MastraRuntimeRegistry::new());
+            let ping_tool = Tool::new("ping", "Ping test tool", |input, _context| async move {
+                Ok(json!({
+                    "echo": input,
+                    "ok": true,
+                }))
+            });
 
             server.register_agent(Agent::new(AgentConfig {
                 id: "echo".to_owned(),
@@ -69,10 +79,11 @@ mod tests {
                         tool_calls: Vec::new(),
                     })
                 })),
-                tools: Vec::new(),
+                tools: vec![ping_tool.clone()],
                 memory: None,
                 memory_config: MemoryConfig::default(),
             }));
+            server.register_tool(ping_tool);
 
             server.register_workflow(Workflow::new("demo").then(Step::new(
                 "shape",
@@ -83,6 +94,7 @@ mod tests {
                     }))
                 },
             )));
+            server.register_memory("default", Arc::new(Memory::in_memory()));
             server.register_memory("chat", Arc::new(Memory::in_memory()));
 
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -168,8 +180,14 @@ mod tests {
         assert_eq!(fetched.result, started.run.result);
 
         let memories = client.memories().list().await.unwrap();
-        assert_eq!(memories.memories.len(), 1);
-        assert_eq!(memories.memories[0].id, "chat");
+        assert_eq!(memories.memories.len(), 2);
+        assert!(
+            memories
+                .memories
+                .iter()
+                .any(|memory| memory.id == "default")
+        );
+        assert!(memories.memories.iter().any(|memory| memory.id == "chat"));
 
         let thread = client
             .memory("chat")
@@ -396,5 +414,123 @@ mod tests {
         assert!(packages.packages.is_empty());
         assert!(!packages.is_dev);
         assert!(!packages.cms_enabled);
+    }
+
+    #[tokio::test]
+    async fn supports_resource_wrappers_default_memory_and_filtered_workflow_runs() {
+        let harness = TestHarness::spawn().await;
+        let client = MastraClientBuilder::new(harness.base_url.clone())
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap();
+
+        let agent_detail = client.agent("echo").details().await.unwrap();
+        assert_eq!(agent_detail.agent.instructions, "Echo prompt");
+        assert_eq!(agent_detail.agent.tools.len(), 1);
+        assert_eq!(agent_detail.agent.tools[0].id, "ping");
+
+        let agent_tools = client.agent("echo").tools().await.unwrap();
+        assert_eq!(agent_tools.tools.len(), 1);
+        assert_eq!(agent_tools.tools[0].id, "ping");
+
+        let global_tools = client.tools().list().await.unwrap();
+        assert_eq!(global_tools.tools.len(), 1);
+        assert_eq!(global_tools.tools[0].id, "ping");
+
+        let tool_detail = client.tool("ping").details().await.unwrap();
+        assert_eq!(tool_detail.id, "ping");
+
+        let tool_result = client
+            .tool("ping")
+            .execute(ExecuteToolRequest {
+                data: json!({ "value": "pong" }),
+                approved: false,
+                run_id: None,
+                thread_id: None,
+                request_context: Default::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(tool_result.tool_id, "ping");
+        assert_eq!(tool_result.output["ok"], true);
+
+        let workflow_detail = client.workflow("demo").details().await.unwrap();
+        assert_eq!(workflow_detail.workflow.id, "demo");
+        assert_eq!(workflow_detail.workflow.steps.len(), 1);
+        assert_eq!(workflow_detail.workflow.steps[0].id, "shape");
+
+        let created = client
+            .workflow("demo")
+            .create_run(CreateWorkflowRunRequest {
+                resource_id: Some("resource-created".to_owned()),
+                input_data: Some(json!({"topic": "draft"})),
+                request_context: Default::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(created.status, WorkflowRunStatus::Created);
+
+        let started = client
+            .workflow("demo")
+            .start_async(StartWorkflowRunRequest {
+                resource_id: Some("resource-success".to_owned()),
+                input_data: Some(json!({"topic": "rust"})),
+                request_context: Default::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(started.run.status, WorkflowRunStatus::Success);
+
+        let filtered_runs = client
+            .workflow("demo")
+            .runs_with_query(ListWorkflowRunsQuery {
+                page: Some(0),
+                per_page: Some(10),
+                resource_id: Some("resource-success".to_owned()),
+                status: Some(WorkflowRunStatus::Success),
+                from_date: None,
+                to_date: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(filtered_runs.total, 1);
+        assert_eq!(filtered_runs.runs.len(), 1);
+        assert_eq!(
+            filtered_runs.runs[0].resource_id.as_deref(),
+            Some("resource-success")
+        );
+        assert_eq!(filtered_runs.runs[0].status, WorkflowRunStatus::Success);
+
+        let default_thread = client
+            .default_memory()
+            .create_thread(CreateMemoryThreadRequest {
+                id: None,
+                resource_id: Some("resource-default".to_owned()),
+                title: Some("Default thread".to_owned()),
+                metadata: json!({"scope": "default"}),
+            })
+            .await
+            .unwrap()
+            .thread;
+        assert_eq!(default_thread.title.as_deref(), Some("Default thread"));
+
+        let default_thread_client = client.default_memory().thread(default_thread.id.clone());
+        let fetched_default_thread = default_thread_client.get().await.unwrap();
+        assert_eq!(fetched_default_thread.id, default_thread.id);
+
+        default_thread_client
+            .append_messages(AppendMemoryMessagesRequest {
+                messages: vec![MemoryMessageInput {
+                    role: MemoryMessageRole::User,
+                    content: "default hello".to_owned(),
+                    metadata: json!({}),
+                }],
+            })
+            .await
+            .unwrap();
+
+        let default_messages = default_thread_client.messages().await.unwrap();
+        assert_eq!(default_messages.messages.len(), 1);
+        assert_eq!(default_messages.messages[0].content, "default hello");
     }
 }

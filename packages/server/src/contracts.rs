@@ -304,6 +304,8 @@ pub struct WorkflowRunRecord {
     pub run_id: Uuid,
     pub workflow_id: String,
     pub status: WorkflowRunStatus,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
     #[serde(default)]
     pub resource_id: Option<String>,
     #[serde(default)]
@@ -620,6 +622,27 @@ pub struct ListMessagesQuery {
     #[serde(default)]
     #[serde(rename = "endDate", alias = "end_date")]
     pub end_date: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListWorkflowRunsQuery {
+    #[serde(default)]
+    #[serde(alias = "page")]
+    pub page: Option<usize>,
+    #[serde(default)]
+    #[serde(rename = "perPage", alias = "per_page")]
+    pub per_page: Option<usize>,
+    #[serde(default)]
+    #[serde(rename = "fromDate", alias = "from_date")]
+    pub from_date: Option<DateTime<Utc>>,
+    #[serde(default)]
+    #[serde(rename = "toDate", alias = "to_date")]
+    pub to_date: Option<DateTime<Utc>>,
+    #[serde(default)]
+    #[serde(rename = "resourceId", alias = "resource_id")]
+    pub resource_id: Option<String>,
+    #[serde(default)]
+    pub status: Option<WorkflowRunStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
