@@ -11,6 +11,17 @@ Current public route surface implemented by `mastra-server`.
 - `GET /api/agents/{agent_id}/tools`
 - `POST /api/agents/{agent_id}/tools/{tool_id}/execute`
 
+### Agent Request Body Notes
+
+- `generate` and `stream` accept upstream-style camelCase fields:
+  `runId`, `maxSteps`, `requestContext`, `activeTools`, `toolChoice.toolName`.
+- Current live memory shape is accepted:
+  `memory.thread`, `memory.resource`, `memory.options`, `memory.readOnly`.
+- Compatibility aliases are also accepted for the current Rust port:
+  top-level `resourceId` and `threadId`, plus `memory: false`.
+- `memory.key` is rejected with `400 Bad Request` because per-request memory registry switching is not implemented in the current Rust runtime.
+- `instructions`, `system`, `context`, and `output` are wired through, but today they are still normalized onto the Rust runtime's simpler `prompt + instructions + tool filter` execution model rather than the upstream full message-graph / structured-output engine.
+
 ## Tools
 
 - `GET /api/tools`
@@ -53,6 +64,7 @@ Current public route surface implemented by `mastra-server`.
 These upstream route families are still structural gaps in the Rust port:
 
 - workflow `resume` / `resume-async`
+- workflow cancel / time-travel
 - vectors
 - logs
 - telemetry

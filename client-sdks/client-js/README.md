@@ -10,6 +10,8 @@ Despite the upstream-inspired package name, this crate is implemented in Rust an
 - resource clients for agent, workflow, tool, memory, and memory thread operations
 - workflow run listing, lookup, deletion, and streaming
 - top-level convenience methods for collections and default memory threads
+- camelCase request serialization for generate/stream, workflow run, and memory thread operations
+- shared `GenerateMemoryConfig` / `ToolChoice` contract types with the Rust server crate
 
 ## Example
 

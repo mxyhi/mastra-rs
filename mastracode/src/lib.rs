@@ -122,6 +122,7 @@ pub async fn run_headless(options: RunOptions) -> mastra_core::Result<RunOutput>
             run_id: None,
             max_steps: None,
             request_context,
+            ..Default::default()
         })
         .await?;
 

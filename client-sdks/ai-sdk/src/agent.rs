@@ -99,10 +99,17 @@ impl AiSdkEventSource for AiSdkAgent {
                         })
                         .collect(),
                 ),
+                instructions: None,
+                system: None,
+                context: Vec::new(),
+                memory: None,
                 resource_id: request.resource_id.clone(),
                 thread_id: request.thread_id.clone(),
                 run_id: request.run_id.clone(),
                 max_steps: request.max_steps,
+                active_tools: None,
+                tool_choice: None,
+                output: None,
                 request_context: request.request_context.clone(),
             })
             .await

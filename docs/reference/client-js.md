@@ -39,9 +39,25 @@ let thread_client = client.get_memory_thread(thread.thread.id.clone());
 - append, list, and delete messages
 - top-level default-memory helpers
 
+## Agent Generate / Stream Request Shape
+
+Current `GenerateRequest` serializes upstream-style camelCase wire keys.
+
+- top-level execution keys:
+  `runId`, `maxSteps`, `requestContext`, `activeTools`, `toolChoice`, `output`
+- prompt overrides:
+  `instructions`, `system`, `context`
+- memory options:
+  `GenerateMemoryConfig::Options(GenerateMemoryOptions { thread, resource, options, read_only, .. })`
+- compatibility alias still supported:
+  `GenerateMemoryConfig::Enabled(false)` disables recall and persistence for the request
+
+The Rust client now shares the server contract types for `GenerateMemoryConfig` and `ToolChoice`, so request builders and server handlers use the same wire model.
+
 ## Not Yet Implemented
 
 - working memory APIs
 - observational memory APIs
 - vectors, logs, and telemetry clients
 - workflow resume or cancel APIs
+- full upstream structured-output/runtime-processor semantics

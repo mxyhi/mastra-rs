@@ -409,10 +409,17 @@ impl AgentClient {
     ) -> Result<GenerateResponse, MastraClientError> {
         self.generate(GenerateRequest {
             messages: crate::AgentMessages::Text(prompt.into()),
+            instructions: None,
+            system: None,
+            context: Vec::new(),
+            memory: None,
             resource_id: None,
             thread_id: None,
             run_id: None,
             max_steps: Some(1),
+            active_tools: None,
+            tool_choice: None,
+            output: None,
             request_context: Default::default(),
         })
         .await

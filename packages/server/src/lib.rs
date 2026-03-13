@@ -14,14 +14,16 @@ use runtime::{CoreAgentRuntime, CoreWorkflowRuntime};
 pub use contracts::{
     AgentDetail, AgentDetailResponse, AgentMessages, AgentSummary, ChatMessage,
     DeleteWorkflowRunResponse, ErrorResponse, ExecuteToolRequest, ExecuteToolResponse,
-    FinishReason, GenerateResponse, GenerateStreamEvent, GenerateStreamFinishEvent,
+    FinishReason, GenerateMemoryConfig, GenerateMemoryOptions, GenerateMemoryThreadObject,
+    GenerateMemoryThreadRef, GenerateResponse, GenerateStreamEvent, GenerateStreamFinishEvent,
     GenerateStreamStartEvent, GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent,
     GenerateStreamToolResultEvent, GetMemoryThreadResponse, ListToolsResponse,
     ListWorkflowRunsQuery, ListWorkflowRunsResponse, RouteDescription,
     StartWorkflowRunResponse as WorkflowRunResponse, SystemPackage, SystemPackagesResponse,
-    ToolSummary, UpdateMemoryThreadRequest, UsageStats, WorkflowDetail, WorkflowDetailResponse,
-    WorkflowRunRecord, WorkflowRunStatus, WorkflowStepSummary, WorkflowStreamEvent,
-    WorkflowStreamFinishEvent, WorkflowStreamStartEvent, WorkflowStreamStepEvent, WorkflowSummary,
+    ToolChoice, ToolChoiceMode, ToolSummary, UpdateMemoryThreadRequest, UsageStats, WorkflowDetail,
+    WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunStatus, WorkflowStepSummary,
+    WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamStartEvent,
+    WorkflowStreamStepEvent, WorkflowSummary,
 };
 pub use error::ServerError as MastraServerError;
 pub use registry::RuntimeRegistry as MastraRuntimeRegistry;

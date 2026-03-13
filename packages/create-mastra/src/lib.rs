@@ -51,6 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         run_id: None,
         max_steps: None,
         request_context: RequestContext::new().with_resource_id("starter"),
+        ..Default::default()
     }).await?;
 
     println!("agent response: {}", response.text);

@@ -14,7 +14,8 @@ pub use types::{
     CreateMemoryThreadRequest, CreateMemoryThreadResponse, CreateWorkflowRunRequest,
     DeleteMemoryMessagesInput, DeleteMemoryMessagesRequest, DeleteMemoryMessagesResponse,
     DeleteWorkflowRunResponse, ErrorResponse, ExecuteToolRequest, ExecuteToolResponse,
-    FinishReason, GenerateRequest, GenerateResponse, GenerateStreamEvent,
+    FinishReason, GenerateMemoryConfig, GenerateMemoryOptions, GenerateMemoryThreadObject,
+    GenerateMemoryThreadRef, GenerateRequest, GenerateResponse, GenerateStreamEvent,
     GenerateStreamFinishEvent, GenerateStreamStartEvent, GenerateStreamTextDeltaEvent,
     GenerateStreamToolCallEvent, GenerateStreamToolResultEvent, ListAgentsResponse,
     ListMemoriesResponse, ListMemoryMessagesResponse, ListMessagesQuery, ListThreadsQuery,
@@ -22,9 +23,10 @@ pub use types::{
     ListWorkflowsResponse, MemoryMessageInput, MemoryMessageRole, MemorySummary, MessageOrderBy,
     MessageOrderField, OrderDirection, PaginationSizeValue, RouteDescription,
     StartWorkflowRunRequest, StartWorkflowRunResponse, SystemPackage, SystemPackagesResponse,
-    ThreadOrderBy, ThreadOrderField, ToolSummary, UpdateMemoryThreadRequest, UsageStats,
-    WorkflowDetail, WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunRef, WorkflowRunStatus,
-    WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamQuery, WorkflowStreamStartEvent,
+    ThreadOrderBy, ThreadOrderField, ToolChoice, ToolChoiceMode, ToolSummary,
+    UpdateMemoryThreadRequest, UsageStats, WorkflowDetail, WorkflowDetailResponse,
+    WorkflowRunRecord, WorkflowRunRef, WorkflowRunStatus, WorkflowStreamEvent,
+    WorkflowStreamFinishEvent, WorkflowStreamQuery, WorkflowStreamStartEvent,
     WorkflowStreamStepEvent, WorkflowSummary,
 };
 
@@ -34,6 +36,7 @@ mod tests {
 
     use axum::serve;
     use futures::StreamExt;
+    use indexmap::IndexMap;
     use mastra_core::{
         Agent, AgentConfig, MemoryConfig, ModelRequest, ModelResponse, StaticModel, Step, Tool,
         Workflow,
@@ -44,13 +47,15 @@ mod tests {
     use tokio::{net::TcpListener, task::JoinHandle};
 
     use super::{
-        AgentMessages, AppendMemoryMessagesRequest, CloneMemoryThreadRequest,
+        AgentMessages, AppendMemoryMessagesRequest, ChatMessage, CloneMemoryThreadRequest,
         CreateMemoryThreadRequest, CreateWorkflowRunRequest, DeleteMemoryMessagesInput,
-        DeleteMemoryMessagesRequest, ExecuteToolRequest, GenerateRequest, ListMessagesQuery,
-        ListThreadsQuery, ListWorkflowRunsQuery, MastraClient, MastraClientBuilder,
-        MastraClientError, MemoryMessageInput, MemoryMessageRole, MessageOrderBy,
-        MessageOrderField, OrderDirection, PaginationSizeValue, StartWorkflowRunRequest,
-        ThreadOrderBy, ThreadOrderField, UpdateMemoryThreadRequest, WorkflowRunStatus,
+        DeleteMemoryMessagesRequest, ExecuteToolRequest, GenerateMemoryConfig,
+        GenerateMemoryOptions, GenerateMemoryThreadObject, GenerateMemoryThreadRef,
+        GenerateRequest, ListMessagesQuery, ListThreadsQuery, ListWorkflowRunsQuery, MastraClient,
+        MastraClientBuilder, MastraClientError, MemoryMessageInput, MemoryMessageRole,
+        MessageOrderBy, MessageOrderField, OrderDirection, PaginationSizeValue,
+        StartWorkflowRunRequest, ThreadOrderBy, ThreadOrderField, ToolChoice,
+        UpdateMemoryThreadRequest, WorkflowRunStatus,
     };
 
     struct TestHarness {
@@ -135,10 +140,17 @@ mod tests {
             .agent("echo")
             .generate(GenerateRequest {
                 messages: AgentMessages::Text("hello".to_owned()),
+                instructions: None,
+                system: None,
+                context: Vec::new(),
+                memory: None,
                 resource_id: None,
                 thread_id: None,
                 run_id: Some("run-1".to_owned()),
                 max_steps: Some(1),
+                active_tools: None,
+                tool_choice: None,
+                output: None,
                 request_context: Default::default(),
             })
             .await
@@ -699,5 +711,88 @@ mod tests {
             .unwrap();
         assert_eq!(fetched.id, created.id);
         assert_eq!(fetched.title.as_deref(), Some("Top-level memory thread"));
+    }
+
+    #[test]
+    fn serializes_requests_using_official_camel_case_wire_keys() {
+        let generate_payload = serde_json::to_value(GenerateRequest {
+            messages: AgentMessages::Text("hello".to_owned()),
+            instructions: Some("Follow JSON schema".to_owned()),
+            system: Some("System prompt".to_owned()),
+            context: vec![ChatMessage {
+                role: "assistant".to_owned(),
+                content: "prior context".to_owned(),
+            }],
+            memory: Some(GenerateMemoryConfig::Enabled(false)),
+            resource_id: Some("resource-1".to_owned()),
+            thread_id: Some("thread-1".to_owned()),
+            run_id: Some("run-1".to_owned()),
+            max_steps: Some(2),
+            active_tools: Some(vec!["calculator".to_owned()]),
+            tool_choice: Some(ToolChoice::tool("calculator")),
+            output: Some(json!({ "type": "object" })),
+            request_context: Default::default(),
+        })
+        .expect("generate request should serialize");
+        assert_eq!(generate_payload["resourceId"], "resource-1");
+        assert_eq!(generate_payload["threadId"], "thread-1");
+        assert_eq!(generate_payload["runId"], "run-1");
+        assert_eq!(generate_payload["maxSteps"], 2);
+        assert_eq!(generate_payload["activeTools"], json!(["calculator"]));
+        assert_eq!(
+            generate_payload["toolChoice"],
+            json!({ "type": "tool", "toolName": "calculator" })
+        );
+        let live_memory_payload = serde_json::to_value(GenerateRequest {
+            messages: AgentMessages::Text("hello".to_owned()),
+            instructions: None,
+            system: None,
+            context: Vec::new(),
+            memory: Some(GenerateMemoryConfig::Options(GenerateMemoryOptions {
+                key: None,
+                thread: Some(GenerateMemoryThreadRef::Thread(
+                    GenerateMemoryThreadObject {
+                        id: "thread-9".to_owned(),
+                        extra: IndexMap::from([("title".to_owned(), json!("Existing"))]),
+                    },
+                )),
+                resource: Some("resource-9".to_owned()),
+                options: Some(IndexMap::from([("readOnly".to_owned(), json!(true))])),
+                read_only: Some(true),
+                extra: IndexMap::new(),
+            })),
+            resource_id: None,
+            thread_id: None,
+            run_id: None,
+            max_steps: Some(1),
+            active_tools: None,
+            tool_choice: None,
+            output: None,
+            request_context: Default::default(),
+        })
+        .expect("live memory request should serialize");
+        assert_eq!(live_memory_payload["memory"]["thread"]["id"], "thread-9");
+        assert_eq!(live_memory_payload["memory"]["resource"], "resource-9");
+        assert_eq!(live_memory_payload["memory"]["readOnly"], true);
+
+        let workflow_payload = serde_json::to_value(CreateWorkflowRunRequest {
+            run_id: Some("run-2".to_owned()),
+            resource_id: Some("resource-2".to_owned()),
+            input_data: Some(json!({ "topic": "rust" })),
+            request_context: Default::default(),
+        })
+        .expect("workflow request should serialize");
+        assert_eq!(workflow_payload["runId"], "run-2");
+        assert_eq!(workflow_payload["resourceId"], "resource-2");
+        assert_eq!(workflow_payload["inputData"], json!({ "topic": "rust" }));
+
+        let thread_payload = serde_json::to_value(CreateMemoryThreadRequest {
+            id: Some("thread-2".to_owned()),
+            resource_id: Some("resource-3".to_owned()),
+            title: Some("Support".to_owned()),
+            metadata: json!({ "scope": "support" }),
+        })
+        .expect("memory request should serialize");
+        assert_eq!(thread_payload["resourceId"], "resource-3");
     }
 }

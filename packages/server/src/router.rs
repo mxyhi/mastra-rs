@@ -1788,10 +1788,17 @@ mod tests {
     async fn generates_agent_responses() {
         let request = serde_json::to_vec(&GenerateRequest {
             messages: AgentMessages::Text("hello".to_owned()),
+            instructions: None,
+            system: None,
+            context: Vec::new(),
+            memory: None,
             resource_id: None,
             thread_id: None,
             run_id: None,
             max_steps: Some(1),
+            active_tools: None,
+            tool_choice: None,
+            output: None,
             request_context: Default::default(),
         })
         .unwrap();
@@ -1818,10 +1825,17 @@ mod tests {
     async fn streams_agent_responses_as_sse_events() {
         let request = serde_json::to_vec(&GenerateRequest {
             messages: AgentMessages::Text("hello".to_owned()),
+            instructions: None,
+            system: None,
+            context: Vec::new(),
+            memory: None,
             resource_id: None,
             thread_id: None,
             run_id: Some("run-123".to_owned()),
             max_steps: Some(1),
+            active_tools: None,
+            tool_choice: None,
+            output: None,
             request_context: Default::default(),
         })
         .unwrap();
@@ -1851,10 +1865,17 @@ mod tests {
     async fn streams_tool_lifecycle_events_as_sse() {
         let request = serde_json::to_vec(&GenerateRequest {
             messages: AgentMessages::Text("2 + 5 = ?".to_owned()),
+            instructions: None,
+            system: None,
+            context: Vec::new(),
+            memory: None,
             resource_id: None,
             thread_id: Some("thread-http".to_owned()),
             run_id: Some("run-tool".to_owned()),
             max_steps: Some(4),
+            active_tools: None,
+            tool_choice: None,
+            output: None,
             request_context: Default::default(),
         })
         .unwrap();

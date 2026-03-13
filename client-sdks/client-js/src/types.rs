@@ -7,27 +7,49 @@ use uuid::Uuid;
 
 pub use mastra_server::{
     AgentDetail, AgentDetailResponse, AgentMessages, AgentSummary, ChatMessage, ErrorResponse,
-    ExecuteToolRequest, ExecuteToolResponse, FinishReason, GenerateResponse, GenerateStreamEvent,
-    GenerateStreamFinishEvent, GenerateStreamStartEvent, GenerateStreamTextDeltaEvent,
-    GenerateStreamToolCallEvent, GenerateStreamToolResultEvent, GetMemoryThreadResponse,
-    ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse, ToolSummary, UsageStats,
-    WorkflowDetail, WorkflowDetailResponse, WorkflowRunRecord, WorkflowRunStatus,
-    WorkflowStreamEvent, WorkflowStreamFinishEvent, WorkflowStreamStartEvent,
-    WorkflowStreamStepEvent, WorkflowSummary,
+    ExecuteToolRequest, ExecuteToolResponse, FinishReason, GenerateMemoryConfig,
+    GenerateMemoryOptions, GenerateMemoryThreadObject, GenerateMemoryThreadRef, GenerateResponse,
+    GenerateStreamEvent, GenerateStreamFinishEvent, GenerateStreamStartEvent,
+    GenerateStreamTextDeltaEvent, GenerateStreamToolCallEvent, GenerateStreamToolResultEvent,
+    GetMemoryThreadResponse, ListToolsResponse, ListWorkflowRunsQuery, ListWorkflowRunsResponse,
+    ToolChoice, ToolChoiceMode, ToolSummary, UsageStats, WorkflowDetail, WorkflowDetailResponse,
+    WorkflowRunRecord, WorkflowRunStatus, WorkflowStreamEvent, WorkflowStreamFinishEvent,
+    WorkflowStreamStartEvent, WorkflowStreamStepEvent, WorkflowSummary,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GenerateRequest {
     pub messages: AgentMessages,
     #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub system: Option<String>,
+    #[serde(default)]
+    pub context: Vec<ChatMessage>,
+    #[serde(default)]
+    pub memory: Option<GenerateMemoryConfig>,
+    #[serde(default)]
+    #[serde(rename = "resourceId", alias = "resource_id")]
     pub resource_id: Option<String>,
     #[serde(default)]
+    #[serde(rename = "threadId", alias = "thread_id")]
     pub thread_id: Option<String>,
     #[serde(default)]
+    #[serde(rename = "runId", alias = "run_id")]
     pub run_id: Option<String>,
     #[serde(default)]
+    #[serde(rename = "maxSteps", alias = "max_steps")]
     pub max_steps: Option<u32>,
     #[serde(default)]
+    #[serde(rename = "activeTools", alias = "active_tools")]
+    pub active_tools: Option<Vec<String>>,
+    #[serde(default)]
+    #[serde(rename = "toolChoice", alias = "tool_choice")]
+    pub tool_choice: Option<ToolChoice>,
+    #[serde(default)]
+    pub output: Option<Value>,
+    #[serde(default)]
+    #[serde(rename = "requestContext", alias = "request_context")]
     pub request_context: IndexMap<String, Value>,
 }
 
@@ -54,23 +76,29 @@ pub struct ListMemoriesResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateWorkflowRunRequest {
     #[serde(default)]
-    #[serde(alias = "runId")]
+    #[serde(rename = "runId", alias = "run_id")]
     pub run_id: Option<String>,
     #[serde(default)]
+    #[serde(rename = "resourceId", alias = "resource_id")]
     pub resource_id: Option<String>,
     #[serde(default)]
+    #[serde(rename = "inputData", alias = "input_data")]
     pub input_data: Option<Value>,
     #[serde(default)]
+    #[serde(rename = "requestContext", alias = "request_context")]
     pub request_context: IndexMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StartWorkflowRunRequest {
     #[serde(default)]
+    #[serde(rename = "resourceId", alias = "resource_id")]
     pub resource_id: Option<String>,
     #[serde(default)]
+    #[serde(rename = "inputData", alias = "input_data")]
     pub input_data: Option<Value>,
     #[serde(default)]
+    #[serde(rename = "requestContext", alias = "request_context")]
     pub request_context: IndexMap<String, Value>,
 }
 
@@ -89,6 +117,7 @@ pub struct CreateMemoryThreadRequest {
     #[serde(default)]
     pub id: Option<String>,
     #[serde(default)]
+    #[serde(rename = "resourceId", alias = "resource_id")]
     pub resource_id: Option<String>,
     #[serde(default)]
     pub title: Option<String>,

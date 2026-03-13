@@ -120,9 +120,168 @@ pub enum FinishReason {
     Length,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct GenerateMemoryOptions {
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub thread: Option<GenerateMemoryThreadRef>,
+    #[serde(default)]
+    pub resource: Option<String>,
+    #[serde(default)]
+    pub options: Option<IndexMap<String, Value>>,
+    #[serde(default)]
+    #[serde(rename = "readOnly", alias = "read_only")]
+    pub read_only: Option<bool>,
+    #[serde(flatten)]
+    pub extra: IndexMap<String, Value>,
+}
+
+impl GenerateMemoryOptions {
+    pub fn thread_id(&self) -> Option<&str> {
+        self.thread.as_ref().and_then(GenerateMemoryThreadRef::id)
+    }
+
+    pub fn read_only(&self) -> bool {
+        self.read_only.unwrap_or_else(|| {
+            self.options
+                .as_ref()
+                .and_then(|options| options.get("readOnly").and_then(Value::as_bool))
+                .or_else(|| {
+                    self.options
+                        .as_ref()
+                        .and_then(|options| options.get("read_only").and_then(Value::as_bool))
+                })
+                .unwrap_or(false)
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum GenerateMemoryThreadRef {
+    Id(String),
+    Thread(GenerateMemoryThreadObject),
+}
+
+impl GenerateMemoryThreadRef {
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Self::Id(id) => Some(id.as_str()),
+            Self::Thread(thread) => Some(thread.id.as_str()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GenerateMemoryThreadObject {
+    pub id: String,
+    #[serde(flatten)]
+    pub extra: IndexMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum GenerateMemoryConfig {
+    Enabled(bool),
+    Options(GenerateMemoryOptions),
+}
+
+impl GenerateMemoryConfig {
+    pub fn disables_memory(&self) -> bool {
+        matches!(self, Self::Enabled(false))
+    }
+
+    pub fn key(&self) -> Option<&str> {
+        match self {
+            Self::Options(options) => options.key.as_deref(),
+            Self::Enabled(_) => None,
+        }
+    }
+
+    pub fn thread_id(&self) -> Option<&str> {
+        match self {
+            Self::Options(options) => options.thread_id(),
+            Self::Enabled(_) => None,
+        }
+    }
+
+    pub fn resource(&self) -> Option<&str> {
+        match self {
+            Self::Options(options) => options.resource.as_deref(),
+            Self::Enabled(_) => None,
+        }
+    }
+
+    pub fn read_only(&self) -> bool {
+        match self {
+            Self::Options(options) => options.read_only(),
+            Self::Enabled(_) => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolChoiceMode {
+    Auto,
+    None,
+    Required,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ToolChoiceKind {
+    #[serde(rename = "tool")]
+    Tool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolChoiceTool {
+    #[serde(rename = "type")]
+    pub kind: ToolChoiceKind,
+    #[serde(rename = "toolName")]
+    pub tool_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ToolChoice {
+    Mode(ToolChoiceMode),
+    Tool(ToolChoiceTool),
+}
+
+impl ToolChoice {
+    pub fn auto() -> Self {
+        Self::Mode(ToolChoiceMode::Auto)
+    }
+
+    pub fn none() -> Self {
+        Self::Mode(ToolChoiceMode::None)
+    }
+
+    pub fn required() -> Self {
+        Self::Mode(ToolChoiceMode::Required)
+    }
+
+    pub fn tool(tool_name: impl Into<String>) -> Self {
+        Self::Tool(ToolChoiceTool {
+            kind: ToolChoiceKind::Tool,
+            tool_name: tool_name.into(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GenerateRequest {
     pub messages: AgentMessages,
+    #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub system: Option<String>,
+    #[serde(default)]
+    pub context: Vec<ChatMessage>,
+    #[serde(default)]
+    pub memory: Option<GenerateMemoryConfig>,
     #[serde(default)]
     #[serde(alias = "resourceId")]
     pub resource_id: Option<String>,
@@ -135,6 +294,14 @@ pub struct GenerateRequest {
     #[serde(default)]
     #[serde(alias = "maxSteps")]
     pub max_steps: Option<u32>,
+    #[serde(default)]
+    #[serde(alias = "activeTools")]
+    pub active_tools: Option<Vec<String>>,
+    #[serde(default)]
+    #[serde(alias = "toolChoice")]
+    pub tool_choice: Option<ToolChoice>,
+    #[serde(default)]
+    pub output: Option<Value>,
     #[serde(default)]
     #[serde(alias = "requestContext")]
     pub request_context: IndexMap<String, Value>,
@@ -794,7 +961,10 @@ pub struct SystemPackagesResponse {
 mod tests {
     use serde_json::json;
 
-    use super::{DeleteMemoryMessagesRequest, GenerateRequest, StartWorkflowRunRequest};
+    use super::{
+        DeleteMemoryMessagesRequest, GenerateMemoryConfig, GenerateRequest,
+        StartWorkflowRunRequest, ToolChoice,
+    };
 
     #[test]
     fn generate_request_deserializes_official_camel_case_fields() {
@@ -815,6 +985,62 @@ mod tests {
         assert_eq!(request.run_id.as_deref(), Some("run-1"));
         assert_eq!(request.max_steps, Some(3));
         assert_eq!(request.request_context["tenant"], json!("acme"));
+    }
+
+    #[test]
+    fn generate_request_deserializes_official_optional_agent_fields() {
+        let request: GenerateRequest = serde_json::from_value(json!({
+            "messages": [{ "role": "user", "content": "hello" }],
+            "instructions": "Follow the request override",
+            "system": "System prompt",
+            "context": [{ "role": "assistant", "content": "prior context" }],
+            "memory": false,
+            "activeTools": ["calculator"],
+            "toolChoice": { "type": "tool", "toolName": "calculator" },
+            "output": { "type": "object", "properties": { "answer": { "type": "string" } } }
+        }))
+        .expect("request should deserialize");
+
+        assert_eq!(
+            request.instructions.as_deref(),
+            Some("Follow the request override")
+        );
+        assert_eq!(request.system.as_deref(), Some("System prompt"));
+        assert_eq!(request.context.len(), 1);
+        assert_eq!(request.context[0].content, "prior context");
+        assert_eq!(request.memory, Some(GenerateMemoryConfig::Enabled(false)));
+        assert_eq!(request.active_tools, Some(vec!["calculator".to_owned()]));
+        assert_eq!(request.tool_choice, Some(ToolChoice::tool("calculator")));
+        assert_eq!(
+            request.output,
+            Some(json!({
+                "type": "object",
+                "properties": {
+                    "answer": { "type": "string" }
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn generate_request_deserializes_live_memory_shape() {
+        let request: GenerateRequest = serde_json::from_value(json!({
+            "messages": "hello",
+            "memory": {
+                "thread": { "id": "thread-1", "title": "Existing" },
+                "resource": "resource-1",
+                "readOnly": true,
+                "options": {
+                    "readOnly": true
+                }
+            }
+        }))
+        .expect("request should deserialize");
+
+        let memory = request.memory.expect("memory should deserialize");
+        assert_eq!(memory.thread_id(), Some("thread-1"));
+        assert_eq!(memory.resource(), Some("resource-1"));
+        assert!(memory.read_only());
     }
 
     #[test]

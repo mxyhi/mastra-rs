@@ -155,6 +155,7 @@ impl Mastra {
                 run_id: None,
                 max_steps: None,
                 request_context: RequestContext::new(),
+                ..Default::default()
             },
         )
         .await
@@ -424,6 +425,7 @@ mod tests {
                 run_id: None,
                 max_steps: None,
                 request_context: RequestContext::new(),
+                ..Default::default()
             })
             .await
             .expect("agent should respond");
@@ -454,6 +456,7 @@ mod tests {
                 run_id: None,
                 max_steps: None,
                 request_context: RequestContext::new(),
+                ..Default::default()
             })
             .try_collect::<Vec<_>>()
             .await

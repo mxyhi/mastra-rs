@@ -23,6 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             run_id: None,
             max_steps: Some(1),
             request_context: RequestContext::new().with_resource_id("example"),
+            ..Default::default()
         })
         .await?;
 

@@ -137,6 +137,7 @@ impl Step {
                             run_id: context.run_id,
                             max_steps: None,
                             request_context: context.request_context,
+                            ..Default::default()
                         })
                         .await?;
                     Ok(serde_json::to_value(response).unwrap_or(Value::Null))

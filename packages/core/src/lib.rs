@@ -8,8 +8,9 @@ pub mod tool;
 pub mod workflow;
 
 pub use agent::{
-    Agent, AgentConfig, AgentGenerateRequest, AgentResponse, AgentStreamRequest,
-    AgentStreamResponse,
+    Agent, AgentConfig, AgentContextMessage, AgentGenerateRequest, AgentNamedToolChoice,
+    AgentNamedToolChoiceKind, AgentResponse, AgentStreamRequest, AgentStreamResponse,
+    AgentToolChoice, AgentToolChoiceMode,
 };
 pub use error::{MastraError, MastraErrorCode, Result};
 pub use mastra::{Mastra, MastraBuilder};

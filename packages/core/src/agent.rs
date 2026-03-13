@@ -54,6 +54,17 @@ pub struct AgentGenerateRequest {
     pub resource_id: Option<String>,
     pub run_id: Option<String>,
     pub max_steps: Option<u32>,
+    pub instructions_override: Option<String>,
+    pub system: Option<String>,
+    #[serde(default)]
+    pub context: Vec<AgentContextMessage>,
+    #[serde(default)]
+    pub disable_memory: bool,
+    #[serde(default)]
+    pub memory_read_only: bool,
+    pub active_tools: Option<Vec<String>>,
+    pub tool_choice: Option<AgentToolChoice>,
+    pub output_schema: Option<Value>,
     pub request_context: RequestContext,
 }
 
@@ -76,7 +87,62 @@ pub struct AgentStreamRequest {
     pub resource_id: Option<String>,
     pub run_id: Option<String>,
     pub max_steps: Option<u32>,
+    pub instructions_override: Option<String>,
+    pub system: Option<String>,
+    #[serde(default)]
+    pub context: Vec<AgentContextMessage>,
+    #[serde(default)]
+    pub disable_memory: bool,
+    #[serde(default)]
+    pub memory_read_only: bool,
+    pub active_tools: Option<Vec<String>>,
+    pub tool_choice: Option<AgentToolChoice>,
+    pub output_schema: Option<Value>,
     pub request_context: RequestContext,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct AgentContextMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum AgentToolChoice {
+    Mode(AgentToolChoiceMode),
+    Tool(AgentNamedToolChoice),
+}
+
+impl AgentToolChoice {
+    pub fn tool(tool_name: impl Into<String>) -> Self {
+        Self::Tool(AgentNamedToolChoice {
+            kind: AgentNamedToolChoiceKind::Tool,
+            tool_name: tool_name.into(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentToolChoiceMode {
+    Auto,
+    None,
+    Required,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct AgentNamedToolChoice {
+    #[serde(rename = "type")]
+    pub kind: AgentNamedToolChoiceKind,
+    #[serde(rename = "toolName")]
+    pub tool_name: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub enum AgentNamedToolChoiceKind {
+    #[serde(rename = "tool")]
+    Tool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -134,13 +200,39 @@ impl Agent {
             resource_id,
             run_id,
             max_steps,
+            instructions_override,
+            system,
+            context,
+            disable_memory,
+            memory_read_only,
+            active_tools,
+            tool_choice,
+            output_schema,
             request_context,
         } = request;
-        let (thread_id, memory_context) =
-            self.prepare_memory(&prompt, thread_id, resource_id).await?;
+        let model_prompt = compose_prompt(&prompt, &context);
+        let instructions = compose_instructions(
+            &self.instructions,
+            instructions_override.as_deref(),
+            system.as_deref(),
+            output_schema.as_ref(),
+        );
+        let tool_names = resolve_tool_names(
+            self.tool_names(),
+            active_tools.as_deref(),
+            tool_choice.as_ref(),
+        );
+        let (thread_id, memory_context) = self
+            .prepare_memory(
+                &prompt,
+                thread_id,
+                resource_id,
+                disable_memory,
+                memory_read_only,
+            )
+            .await?;
         let run_id = run_id.unwrap_or_else(|| Uuid::now_v7().to_string());
         let max_steps = max_steps.unwrap_or(DEFAULT_AGENT_MAX_STEPS).max(1);
-        let tool_names = self.tool_names();
         let mut tool_results = Vec::new();
         let mut aggregated_usage = None;
 
@@ -148,8 +240,8 @@ impl Agent {
             let response = self
                 .model
                 .generate(ModelRequest {
-                    prompt: prompt.clone(),
-                    instructions: self.instructions.clone(),
+                    prompt: model_prompt.clone(),
+                    instructions: instructions.clone(),
                     memory: memory_context.clone(),
                     tool_names: tool_names.clone(),
                     tool_results: tool_results.clone(),
@@ -174,8 +266,15 @@ impl Agent {
                 if let Some(usage) = aggregated_usage.clone() {
                     response.usage = Some(usage);
                 }
-                self.persist_response(&thread_id, &prompt, &tool_results, &response)
-                    .await?;
+                self.persist_response(
+                    &thread_id,
+                    &prompt,
+                    &tool_results,
+                    &response,
+                    disable_memory,
+                    memory_read_only,
+                )
+                .await?;
                 return Ok(self.to_agent_response(response, run_id, thread_id, tool_names));
             }
 
@@ -187,7 +286,13 @@ impl Agent {
             }
 
             let mut round_results = self
-                .execute_tool_calls(&tool_calls, &request_context, &run_id, &thread_id)
+                .execute_tool_calls(
+                    &tool_calls,
+                    &tool_names,
+                    &request_context,
+                    &run_id,
+                    &thread_id,
+                )
                 .await?;
             tool_results.append(&mut round_results);
         }
@@ -202,8 +307,15 @@ impl Agent {
         &self,
         request: AgentStreamRequest,
     ) -> futures::stream::BoxStream<'static, Result<AgentStreamResponse>> {
-        if !self.tools.is_empty() {
+        let resolved_tool_names = resolve_tool_names(
+            self.tool_names(),
+            request.active_tools.as_deref(),
+            request.tool_choice.as_ref(),
+        );
+
+        if !resolved_tool_names.is_empty() {
             let agent = self.clone();
+            let resolved_tool_names = resolved_tool_names.clone();
             return try_stream! {
                 let AgentStreamRequest {
                     prompt,
@@ -211,12 +323,35 @@ impl Agent {
                     resource_id,
                     run_id,
                     max_steps,
+                    instructions_override,
+                    system,
+                    context,
+                    disable_memory,
+                    memory_read_only,
+                    active_tools: _,
+                    tool_choice: _,
+                    output_schema,
                     request_context,
                 } = request;
-                let (thread_id, memory_context) = agent.prepare_memory(&prompt, thread_id, resource_id).await?;
+                let model_prompt = compose_prompt(&prompt, &context);
+                let instructions = compose_instructions(
+                    &agent.instructions,
+                    instructions_override.as_deref(),
+                    system.as_deref(),
+                    output_schema.as_ref(),
+                );
+                let (thread_id, memory_context) =
+                    agent
+                        .prepare_memory(
+                            &prompt,
+                            thread_id,
+                            resource_id,
+                            disable_memory,
+                            memory_read_only,
+                        )
+                        .await?;
                 let run_id = run_id.unwrap_or_else(|| Uuid::now_v7().to_string());
                 let max_steps = max_steps.unwrap_or(DEFAULT_AGENT_MAX_STEPS).max(1);
-                let tool_names = agent.tool_names();
                 let mut tool_results = Vec::new();
                 let mut aggregated_usage = None;
 
@@ -224,10 +359,10 @@ impl Agent {
                     let response = agent
                         .model
                         .generate(ModelRequest {
-                            prompt: prompt.clone(),
-                            instructions: agent.instructions.clone(),
+                            prompt: model_prompt.clone(),
+                            instructions: instructions.clone(),
                             memory: memory_context.clone(),
-                            tool_names: tool_names.clone(),
+                            tool_names: resolved_tool_names.clone(),
                             tool_results: tool_results.clone(),
                             run_id: Some(run_id.clone()),
                             thread_id: thread_id.clone(),
@@ -251,7 +386,14 @@ impl Agent {
                             response.usage = Some(usage);
                         }
                         agent
-                            .persist_response(&thread_id, &prompt, &tool_results, &response)
+                            .persist_response(
+                                &thread_id,
+                                &prompt,
+                                &tool_results,
+                                &response,
+                                disable_memory,
+                                memory_read_only,
+                            )
                             .await?;
                         yield AgentStreamResponse {
                             id: agent.id.clone(),
@@ -277,7 +419,13 @@ impl Agent {
                     }
 
                     let mut round_results = agent
-                        .execute_tool_calls(&tool_calls, &request_context, &run_id, &thread_id)
+                        .execute_tool_calls(
+                            &tool_calls,
+                            &resolved_tool_names,
+                            &request_context,
+                            &run_id,
+                            &thread_id,
+                        )
                         .await?;
 
                     for result in &round_results {
@@ -301,17 +449,31 @@ impl Agent {
 
         let agent = self.clone();
         stream::once(async move {
+            let disable_memory = request.disable_memory;
             let run_id = request.run_id.unwrap_or_else(|| Uuid::now_v7().to_string());
             let max_steps = request.max_steps.unwrap_or(DEFAULT_AGENT_MAX_STEPS).max(1);
+            let model_prompt = compose_prompt(&request.prompt, &request.context);
+            let instructions = compose_instructions(
+                &agent.instructions,
+                request.instructions_override.as_deref(),
+                request.system.as_deref(),
+                request.output_schema.as_ref(),
+            );
             let (thread_id, memory_context) = agent
-                .prepare_memory(&request.prompt, request.thread_id, request.resource_id)
+                .prepare_memory(
+                    &request.prompt,
+                    request.thread_id,
+                    request.resource_id,
+                    disable_memory,
+                    request.memory_read_only,
+                )
                 .await?;
             let prompt = request.prompt;
             let stream = agent.model.stream(ModelRequest {
-                prompt: prompt.clone(),
-                instructions: agent.instructions.clone(),
+                prompt: model_prompt,
+                instructions,
                 memory: memory_context,
-                tool_names: agent.tool_names(),
+                tool_names: resolved_tool_names,
                 tool_results: Vec::new(),
                 run_id: Some(run_id),
                 thread_id: thread_id.clone(),
@@ -319,10 +481,17 @@ impl Agent {
                 request_context: request.request_context,
             });
 
-            Ok::<_, MastraError>((agent, prompt, thread_id, stream))
+            Ok::<_, MastraError>((
+                agent,
+                prompt,
+                thread_id,
+                stream,
+                disable_memory,
+                request.memory_read_only,
+            ))
         })
         .flat_map(|result| match result {
-            Ok((agent, prompt, thread_id, stream)) => {
+            Ok((agent, prompt, thread_id, stream, disable_memory, memory_read_only)) => {
                 let agent_id = agent.id.clone();
                 stream
                     .then(move |event| {
@@ -334,7 +503,14 @@ impl Agent {
                             let event = event?;
                             if let ModelEvent::Done(response) = &event {
                                 agent
-                                    .persist_response(&thread_id, &prompt, &[], response)
+                                    .persist_response(
+                                        &thread_id,
+                                        &prompt,
+                                        &[],
+                                        response,
+                                        disable_memory,
+                                        memory_read_only,
+                                    )
                                     .await?;
                             }
 
@@ -357,13 +533,22 @@ impl Agent {
         prompt: &str,
         thread_id: Option<String>,
         resource_id: Option<String>,
+        disable_memory: bool,
+        memory_read_only: bool,
     ) -> Result<(Option<String>, Vec<String>)> {
+        if disable_memory {
+            return Ok((thread_id, Vec::new()));
+        }
+
         let Some(memory) = &self.memory else {
             return Ok((thread_id, Vec::new()));
         };
 
         let thread_id = match thread_id {
             Some(thread_id) => thread_id,
+            None if memory_read_only => {
+                return Ok((None, Vec::new()));
+            }
             None => {
                 let thread = memory
                     .create_thread(CreateThreadRequest {
@@ -400,6 +585,7 @@ impl Agent {
     async fn execute_tool_calls(
         &self,
         tool_calls: &[ModelToolCall],
+        allowed_tool_names: &[String],
         request_context: &RequestContext,
         run_id: &str,
         thread_id: &Option<String>,
@@ -407,6 +593,15 @@ impl Agent {
         let mut results = Vec::with_capacity(tool_calls.len());
 
         for call in tool_calls {
+            if !allowed_tool_names
+                .iter()
+                .any(|tool_name| tool_name == &call.name)
+            {
+                return Err(MastraError::tool(format!(
+                    "agent '{}' received disallowed tool call '{}'",
+                    self.id, call.name
+                )));
+            }
             let tool = self
                 .tools
                 .iter()
@@ -465,7 +660,13 @@ impl Agent {
         prompt: &str,
         tool_results: &[ModelToolResult],
         response: &ModelResponse,
+        disable_memory: bool,
+        memory_read_only: bool,
     ) -> Result<()> {
+        if disable_memory || memory_read_only {
+            return Ok(());
+        }
+
         let Some(memory) = &self.memory else {
             return Ok(());
         };
@@ -528,6 +729,79 @@ impl Agent {
           "tools": self.tool_names(),
         })
     }
+}
+
+fn compose_prompt(prompt: &str, context: &[AgentContextMessage]) -> String {
+    if context.is_empty() {
+        return prompt.to_owned();
+    }
+
+    let mut segments = context
+        .iter()
+        .map(|message| {
+            let role = message.role.trim();
+            let role = if role.is_empty() { "message" } else { role };
+            format!("{role}: {}", message.content)
+        })
+        .collect::<Vec<_>>();
+    segments.push(prompt.to_owned());
+    segments.join("\n")
+}
+
+fn compose_instructions(
+    base_instructions: &str,
+    instructions_override: Option<&str>,
+    system: Option<&str>,
+    output_schema: Option<&Value>,
+) -> String {
+    let mut sections = Vec::new();
+
+    if !base_instructions.trim().is_empty() {
+        sections.push(base_instructions.trim().to_owned());
+    }
+    if let Some(instructions_override) =
+        instructions_override.filter(|value| !value.trim().is_empty())
+    {
+        sections.push(format!(
+            "Request instructions:\n{}",
+            instructions_override.trim()
+        ));
+    }
+    if let Some(system) = system.filter(|value| !value.trim().is_empty()) {
+        sections.push(format!("System message:\n{}", system.trim()));
+    }
+    if let Some(output_schema) = output_schema {
+        let serialized = serde_json::to_string_pretty(output_schema)
+            .unwrap_or_else(|_| output_schema.to_string());
+        sections.push(format!("Structured output schema:\n{serialized}"));
+    }
+
+    sections.join("\n\n")
+}
+
+fn resolve_tool_names(
+    available_tool_names: Vec<String>,
+    active_tools: Option<&[String]>,
+    tool_choice: Option<&AgentToolChoice>,
+) -> Vec<String> {
+    let mut tool_names = available_tool_names;
+
+    if let Some(active_tools) = active_tools {
+        tool_names.retain(|tool_name| active_tools.iter().any(|active| active == tool_name));
+    }
+
+    match tool_choice {
+        Some(AgentToolChoice::Mode(AgentToolChoiceMode::None)) => {
+            tool_names.clear();
+        }
+        Some(AgentToolChoice::Tool(choice)) => {
+            tool_names.retain(|tool_name| tool_name == &choice.tool_name);
+        }
+        Some(AgentToolChoice::Mode(AgentToolChoiceMode::Auto | AgentToolChoiceMode::Required))
+        | None => {}
+    }
+
+    tool_names
 }
 
 fn accumulate_usage(total: &mut Option<UsageStats>, usage: Option<UsageStats>) {
@@ -652,6 +926,7 @@ mod tests {
                 run_id: None,
                 max_steps: None,
                 request_context: RequestContext::new(),
+                ..Default::default()
             })
             .collect::<Vec<_>>()
             .await;
@@ -782,6 +1057,7 @@ mod tests {
                 run_id: Some("run-123".into()),
                 max_steps: Some(4),
                 request_context: request_context.clone(),
+                ..Default::default()
             })
             .await
             .expect("agent should resolve tool loop");
@@ -906,6 +1182,7 @@ mod tests {
                 run_id: Some("run-tool-memory".into()),
                 max_steps: Some(4),
                 request_context: RequestContext::new(),
+                ..Default::default()
             })
             .await
             .expect("agent should resolve tool loop");
@@ -1007,6 +1284,7 @@ mod tests {
                 run_id: Some("run-stream".into()),
                 max_steps: Some(4),
                 request_context: RequestContext::new(),
+                ..Default::default()
             })
             .collect::<Vec<_>>()
             .await;
